@@ -139,8 +139,20 @@ function App() {
               'line-join': 'round',
             },
             paint: {
-              'line-color': '#e63946',
+              'line-color': '#2a9d8f',
               'line-width': 4.5,
+              'line-gradient': [
+                'interpolate',
+                ['linear'],
+                ['line-progress'],
+                0, '#e63946',
+                0.17, '#f4a261',
+                0.33, '#e9c46a',
+                0.5, '#2a9d8f',
+                0.67, '#457b9d',
+                0.83, '#5a67d8',
+                1, '#6a4c93',
+              ],
             },
           },
           {
