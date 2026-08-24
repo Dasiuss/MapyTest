@@ -117,6 +117,7 @@ function App() {
           track: {
             type: 'geojson',
             data: TRACK_GEOJSON,
+            lineMetrics: true,
           },
         },
         layers: [
