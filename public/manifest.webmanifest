@@ -1,0 +1,26 @@
+{
+  "name": "MapyTest — OpenSnowMap",
+  "short_name": "MapyTest",
+  "description": "Test silnika OpenStreetMap (MapLibre GL) z mapami OpenSnowMap",
+  "lang": "pl",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#ffffff",
+  "theme_color": "#0b3d66",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
