@@ -134,11 +134,13 @@ function App() {
             type: 'line',
             source: 'track',
             filter: ['==', ['geometry-type'], 'LineString'],
+            layout: {
+              'line-cap': 'round',
+              'line-join': 'round',
+            },
             paint: {
               'line-color': '#e63946',
               'line-width': 4.5,
-              'line-cap': 'round',
-              'line-join': 'round',
             },
           },
           {
