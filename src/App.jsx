@@ -182,7 +182,7 @@ function App() {
         ],
         terrain: {
           source: 'terrain',
-          exaggeration: 1.5,
+          exaggeration: 0.6,
         },
         sky: {
           'sky-color': '#a5d6f5',
