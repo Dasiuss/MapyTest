@@ -5,4 +5,10 @@ import { defineConfig } from 'vite'
 export default defineConfig({
   base: '/MapyTest/',
   plugins: [react()],
+  build: {
+    outDir: 'docs',
+  },
+  server: {
+    hmr: false,
+  },
 })

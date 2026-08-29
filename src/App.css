@@ -7,3 +7,28 @@
   width: 100%;
   height: 100%;
 }
+
+.maplibregl-popup-content {
+  font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+  min-width: 180px;
+}
+
+.popup-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 0;
+}
+
+.popup-key {
+  color: #64748b;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.popup-val {
+  color: #0f172a;
+  text-align: right;
+}
