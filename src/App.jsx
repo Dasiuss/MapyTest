@@ -86,6 +86,11 @@ const AERIALWAY_LABELS = {
   zip_line: 'tyrolka',
 }
 
+const MENU_COLLATOR = new Intl.Collator('pl', {
+  numeric: true,
+  sensitivity: 'base',
+})
+
 function toLineString(el) {
   return { type: 'LineString', coordinates: el.geometry.map((n) => [n.lon, n.lat]) }
 }
@@ -647,7 +652,13 @@ function App() {
             const site = f.properties.site || null
             const key = `${site ?? ''}\u0000${label || f.properties.uid}`
             if (!groups.has(key)) {
-              groups.set(key, { label, site, color: colorFn(f), ids: [] })
+              groups.set(key, {
+                label,
+                site,
+                color: colorFn(f),
+                aerialway: f.properties.aerialway,
+                ids: [],
+              })
             }
             groups.get(key).ids.push(f.properties.uid)
           }
@@ -678,10 +689,13 @@ function App() {
           source: 'lifts',
           ids: g.ids,
           label: g.label || 'Wyciąg (bez nazwy)',
-          site: g.site,
-          color: g.color,
-          kind: 'wyciąg',
-        }))
+           site: g.site,
+           color: g.color,
+           kind: 'wyciąg',
+           displayLabel: `${g.label || 'Wyciąg'} (${
+             AERIALWAY_LABELS[g.aerialway] ?? g.aerialway ?? 'nieznany'
+           })`,
+         }))
 
         for (const item of [...pisteItems, ...liftItems]) {
           for (const id of item.ids) {
@@ -703,8 +717,10 @@ function App() {
           [...pisteItems, ...liftItems].sort(
             (a, b) =>
               siteRank(a.site) - siteRank(b.site) ||
-              (a.site || '').localeCompare(b.site || '', 'pl') ||
-              a.label.localeCompare(b.label, 'pl'),
+              MENU_COLLATOR.compare(a.site || '', b.site || '') ||
+              (a.kind === b.kind ? 0 : a.kind === 'trasa' ? -1 : 1) ||
+              MENU_COLLATOR.compare(a.label, b.label) ||
+              MENU_COLLATOR.compare(a.displayLabel || '', b.displayLabel || ''),
           ),
         )
 
@@ -789,7 +805,9 @@ function App() {
   }, [])
 
   const filteredItems = items.filter((it) =>
-    it.label.toLowerCase().includes(search.trim().toLowerCase()),
+    (it.displayLabel || it.label)
+      .toLowerCase()
+      .includes(search.trim().toLowerCase()),
   )
 
   return (
@@ -814,12 +832,19 @@ function App() {
           {filteredItems.map((it, i) => {
             const prev = filteredItems[i - 1]
             const sectionName = it.site || 'Inne'
-            const showSection =
-              i === 0 || (prev ? prev.site || 'Inne' : null) !== sectionName
+            const sameSite = prev && (prev.site || 'Inne') === sectionName
+            const showSection = i === 0 || !sameSite
+            const showKind =
+              !sameSite || prev.kind !== it.kind
             return (
               <Fragment key={`${it.source}/${it.ids[0]}`}>
                 {showSection && (
                   <li className="sidebar-section">{sectionName}</li>
+                )}
+                {showKind && (
+                  <li className="sidebar-subsection">
+                    {it.kind === 'trasa' ? 'Trasy' : 'Wyciągi'}
+                  </li>
                 )}
                 <li>
                   <button
@@ -836,7 +861,9 @@ function App() {
                     }}
                     onDoubleClick={() => flyToItem(it)}
                   >
-                    <span className="sidebar-item-label">{it.label}</span>
+                    <span className="sidebar-item-label">
+                      {it.displayLabel || it.label}
+                    </span>
                     <span
                       className="sidebar-kind"
                       style={{ background: it.color }}

@@ -278,7 +278,12 @@ Kolejność dodawania = kolejność rysowania (pierwsza na spodzie, ostatnia na 
 - Lista zawiera trasy i wyciągi oraz wyszukiwarkę działającą po nazwie/numerze.
 - Elementy są deduplikowane i grupowane po `site` + numerze/nazwie. Odcinki tej samej trasy mają
   wspólny wpis i wspólnie się zaznaczają.
-- Kolejność sekcji: **Sölden**, pozostałe ośrodki alfabetycznie, **Inne** na końcu.
+- Kolejność sekcji: **Sölden**, pozostałe ośrodki alfabetycznie, **Inne** na końcu; w każdym
+  ośrodku najpierw są **Trasy**, a potem **Wyciągi**.
+- Wpisy są sortowane naturalnie przez `Intl.Collator` z opcją `numeric: true`, więc numeryczne
+  etykiety układają się jako `1`, `5`, `10`, `50`, zamiast jako zwykły tekst.
+- Przy nazwie wyciągu wyświetlany jest także polski rodzaj, np. `Giggijoch (krzesełkowy)`;
+  rodzaj pochodzi z `AERIALWAY_LABELS`.
 - Badge `trasa` używa koloru trudności; badge `wyciąg` jest fioletowy `#7c3aed`.
 - Pojedynczy klik zaznacza element i uruchamia pięć mignięć (`blinkSelection`, co 180 ms), kończąc
   na stałym zaznaczeniu.
