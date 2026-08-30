@@ -13,7 +13,7 @@ Silnik: **MapLibre GL** + **React 19** + **Vite**. Cała logika mapy jest w jedn
 
 **Stan dzisiejszy:** zrealizowana jest wizualizacja + interakcja z trasami (klik, etykiety,
 zaznaczanie, kolorowanie wg trudności i ratrakowania). GPS/długości/nachylenia to **następne kroki**
-(nie zaimplementowane — patrz sekcja 15).
+(nie zaimplementowane — patrz sekcja 16).
 
 ---
 
@@ -66,16 +66,24 @@ npm run preview   # podgląd buildu
 
 ---
 
-## 5. Konfiguracja mapy (ustawienia początkowe, niezmienione)
+## 5. Konfiguracja mapy
 
 Definiowana w `new Map({...})` w `src/App.jsx`:
 
-- `center: [10.887, 46.97]` — Sölden (Austria)
-- `zoom: 12.5`, `pitch: 60`, `bearing: -20`
+- `center: [10.9933, 46.96]` — okolice Sölden (Austria)
+- `zoom: 12.5`, `pitch: 40`, `bearing: 0` (północ u góry)
 - `maxPitch: 85`, `maxZoom: 19`
 - `terrain: { source: 'terrain', exaggeration: 0.6 }` — wyolbrzymienie terenu 0.6
 - `sky` — niebo/fog (kolory `#a5d6f5`, `#f0f6fa`, `#e8eef2`), `horizon-fog-blend`/`fog-ground-blend` 0.4
 - `attributionControl: false` — atrybucje dodawane osobno (patrz niżej)
+
+### Ograniczenie pobierania kafelków (bounds)
+
+- `SOLDEN_BOUNDS = [10.75, 46.85, 11.05, 47.1]` (`[west, south, east, north]`).
+- Źródła `topo` i `terrain` mają `bounds: SOLDEN_BOUNDS` — MapLibre **nie pobiera i nie renderuje
+  kafelków poza tym obszarem**. Poza Sölden jest pusto (tło/fog).
+- **Świadomie bez `maxBounds`/`minZoom`** — użytkownik może ruszać mapą swobodnie, ale poza obszarem
+  nie ma co oglądać.
 
 ### Kontrolki (dodawane po utworzeniu mapy)
 
@@ -110,7 +118,8 @@ out body geom;
 3. `pistes` trafia do źródła `pistes` (`promoteId: 'uid'` — do feature-state),
    `lifts` do źródła `lifts`.
 
-4. Warstwy są dodawane **dynamicznie** (po pobraniu), wszystkie wstawiane przed `track-casing`.
+4. Warstwy są dodawane **dynamicznie** (po pobraniu) przez `map.addLayer(...)` bez `beforeId` —
+   kolejność dodawania = kolejność rysowania (pierwsza na spodzie).
 
 ### Geometria
 
@@ -178,24 +187,23 @@ W `overpassToLayers` odrzucane są:
 
 ## 9. Stylizacja warstw
 
-Kolejność dodawania = kolejność rysowania (pierwsza na spodzie, ostatnia na wierzchu),
-wszystkie przed `track-casing` (czyli pod śladem testowym).
+Kolejność dodawania = kolejność rysowania (pierwsza na spodzie, ostatnia na wierzchu).
 
 | id warstwy | typ | Źródło | Opis |
 | --- | --- | --- | --- |
 | `topo` | raster | `topo` | podkład (statyczna, w stylu) |
-| `track-casing` / `track-line` / `track-start` / `track-end` | line/circle | `track` | ślad testowy (statyczne, w stylu) |
-| `pistes-area-fill` | fill | `pistes` | wielokąty tras — kolor trudności, `fill-opacity` 0.26 (0.5 przy zaznaczeniu) |
+| `pistes-area-fill` | fill | `pistes` | wielokąty tras — kolor trudności, `fill-opacity` 0.26 (0.5 przy zaznaczeniu). **Jest też celem kliknięcia** (wnętrze wielokąta) |
 | `pistes-area-outline` | line | `pistes` | obrys wielokątów — kolor trudności, szer. 1.5 (3 + żółty przy zaznaczeniu) |
-| `pistes-area-warning` | line | `pistes` | paski ostrzegawcze na obrysie wielokąta |
 | `pistes-casing` | line | `pistes` | biała obwódka linii, szer. 6 (10 + żółta przy zaznaczeniu) |
 | `pistes-line` | line | `pistes` | kolor trudności, szer. 3, opacity 0.95 |
-| `pistes-warning-stripe` | line | `pistes` | paski ostrzegawcze na linii |
+| `pistes-warning-stripe` | line | `pistes` | paski ostrzegawcze na linii (tylko `warning`) |
 | `pistes-labels` | symbol | `pistes` | numery/nazwy wzdłuż linii |
-| `pistes-hit-line` | line | `pistes` | niewidoczny cel kliknięcia (szer. 18) |
-| `pistes-hit-area` | fill | `pistes` | niewidoczny cel kliknięcia (cały wielokąt) |
+| `pistes-hit-line` | line | `pistes` | niewidoczny cel kliknięcia linii (szer. 18) |
 | `lifts-line` | line | `lifts` | wyciągi — czerwona przerywana linia `#dc2626`, szer. 2.5, dash `[2, 1.5]` |
 | `lifts-hit` | line | `lifts` | niewidoczny cel kliknięcia (szer. 18) |
+
+> **Usunięte warstwy** (historia): `pistes-area-warning` (paski na obrysie wielokąta) i
+> `pistes-hit-area` (scalona z `pistes-area-fill`); cały ślad testowy `track-*`.
 
 ### Paski ostrzegawcze (`warning` = backcountry/mogul)
 
@@ -214,7 +222,7 @@ wszystkie przed `track-casing` (czyli pod śladem testowym).
 - `text-field: ['get', 'label']` (preferuje numer `ref`)
 - `symbol-spacing: 150` (zagęszczone 2× z 300)
 - `text-font: ['Noto Sans Bold']`, `text-size: 11`, `text-letter-spacing: 0.08`
-- `text-allow-overlap: true`, `text-optional: true` (żeby szukać numeru wzrokiem)
+- `text-allow-overlap: false`, `text-optional: true` (napisy nie nachodzą na siebie)
 - biała obwódka (`text-halo-*`), kolor tekstu `#0f172a`
 
 ---
@@ -232,7 +240,7 @@ wszystkie przed `track-casing` (czyli pod śladem testowym).
 
 ### Klik / popup
 
-- Trasa (`pistes-hit-line` / `pistes-hit-area`): popup z **Nazwa**, **Trudność**, **Grooming**.
+- Trasa (`pistes-hit-line` / `pistes-area-fill`): popup z **Nazwa**, **Trudność**, **Grooming**.
   - Grooming wyświetlany jako: `backcountry` → „nieratrakowana (backcountry)", `mogul` → „muldy",
     pozostałe → „ratrakowana".
 - Wyciąg (`lifts-hit`): popup z **Nazwa**, **Rodzaj** (polskie nazwy z `AERIALWAY_LABELS`).
@@ -242,7 +250,8 @@ wszystkie przed `track-casing` (czyli pod śladem testowym).
 ### Hit-area (łatwe klikanie)
 
 - Niewidoczne warstwy (`rgba(0,0,0,0)`) o dużej powierzchni klikania:
-  linie szer. 18 px, wielokąty całe wnętrze — bo trafienie w cienką linię było trudne.
+  linie szer. 18 px (`pistes-hit-line`, `lifts-hit`). Wielokąty klika się po prostu w `pistes-area-fill`
+  (całe wnętrze — osobna hit-area została scalona z fill).
 
 ---
 
@@ -259,14 +268,11 @@ wszystkie przed `track-casing` (czyli pod śladem testowym).
 
 ---
 
-## 12. Ślad testowy (hardcoded)
+## 12. Ślad testowy (USUNIĘTY)
 
-- `RUN_WAYPOINTS` — lista punktów trasy „Gaislachkogl → Sölden".
-- `RUN_SAMPLES = 4` — interpolacja odcinków (wygładzenie).
-- `TRACK_GEOJSON` — LineString + punkty start/end.
-- Warstwy `track-*` rysują ślad z gradientem kolorów (`line-gradient` wg `line-progress`),
-  zielony punkt startu, czerwony punkt końca.
-- **To tylko placeholder** — docelowo ma być zastąpione nagraniem GPS.
+- Dawniej `RUN_WAYPOINTS` / `TRACK_GEOJSON` + warstwy `track-*` rysowały zahardkodowany ślad
+  „Gaislachkogl → Sölden" z gradientem kolorów.
+- **Usunięty całkowicie** — był tylko placeholderem. Docelowo ma wrócić jako nagranie GPS (sekcja 16).
 
 ---
 
@@ -317,6 +323,12 @@ Po pushu GitHub Pages automatycznie serwuje zawartość `docs/`.
     Użytkownik woli nauczyć się domyślnego zachowania.
 11. **Hot-reload wyłączony** (`server.hmr: false`) — użytkownik woli ręczne F5.
 12. **Cache 24 h** w localStorage dla danych Overpass.
+13. **Ograniczenie kafelków:** `bounds: SOLDEN_BOUNDS` na źródłach `topo`/`terrain` (nie `maxBounds`
+    — użytkownik ma się swobodnie poruszać, ale poza obszarem jest pusto).
+14. **Ślad testowy usunięty** całkowicie.
+15. **Optymalizacja warstw:** `pistes-hit-area` scalona z `pistes-area-fill`, usunięta
+    `pistes-area-warning`, `text-allow-overlap: false`. Z 16 warstw zeszliśmy do 11.
+16. **Kamera startowa:** `center [10.9933, 46.96]`, `pitch 40`, `bearing 0` (północ u góry).
 
 ---
 

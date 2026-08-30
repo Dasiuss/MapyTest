@@ -18,6 +18,11 @@ const TOPO_TILES = 'https://a.tile.opentopomap.org/{z}/{x}/{y}.png'
 const TERRAIN_TILES =
   'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'
 
+// Obszar Sölden + lodowce (Rettenbach/Tiefenbach) — pokrywa się z bboxem Overpass.
+// Format [west, south, east, north] — używany jako `bounds` źródeł raster/DEM,
+// żeby nie pobierać i nie renderować kafelków poza tym obszarem.
+const SOLDEN_BOUNDS = [10.75, 46.85, 11.05, 47.1]
+
 const OVERPASS_ENDPOINT = 'https://overpass-api.de/api/interpreter'
 
 const OVERPASS_QUERY = `
@@ -190,64 +195,6 @@ function writeCachedSkiData(data) {
   }
 }
 
-const RUN_WAYPOINTS = [
-  [10.958, 46.9458],
-  [10.955, 46.9468],
-  [10.952, 46.9482],
-  [10.949, 46.9498],
-  [10.946, 46.9518],
-  [10.9435, 46.954],
-  [10.941, 46.9562],
-  [10.9385, 46.9585],
-  [10.936, 46.9608],
-  [10.933, 46.963],
-  [10.9295, 46.965],
-  [10.9255, 46.9668],
-  [10.921, 46.9683],
-  [10.916, 46.9695],
-  [10.911, 46.9705],
-  [10.906, 46.9712],
-  [10.9, 46.971],
-  [10.894, 46.9703],
-  [10.889, 46.97],
-]
-
-const RUN_SAMPLES = 4
-
-const runTrack = RUN_WAYPOINTS.reduce((acc, wp, i) => {
-  if (i === RUN_WAYPOINTS.length - 1) {
-    acc.push(wp)
-    return acc
-  }
-  const next = RUN_WAYPOINTS[i + 1]
-  for (let s = 0; s < RUN_SAMPLES; s++) {
-    const t = s / RUN_SAMPLES
-    acc.push([wp[0] + (next[0] - wp[0]) * t, wp[1] + (next[1] - wp[1]) * t])
-  }
-  return acc
-}, [])
-
-const TRACK_GEOJSON = {
-  type: 'FeatureCollection',
-  features: [
-    {
-      type: 'Feature',
-      properties: { name: 'Gaislachkogl → Sölden' },
-      geometry: { type: 'LineString', coordinates: runTrack },
-    },
-    {
-      type: 'Feature',
-      properties: { kind: 'start' },
-      geometry: { type: 'Point', coordinates: runTrack[0] },
-    },
-    {
-      type: 'Feature',
-      properties: { kind: 'end' },
-      geometry: { type: 'Point', coordinates: runTrack[runTrack.length - 1] },
-    },
-  ],
-}
-
 function App() {
   const mapContainer = useRef(null)
   const mapRef = useRef(null)
@@ -266,6 +213,7 @@ function App() {
             tiles: [TOPO_TILES],
             tileSize: 256,
             maxzoom: 17,
+            bounds: SOLDEN_BOUNDS,
             attribution:
               '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, SRTM | &copy; <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)',
           },
@@ -275,74 +223,13 @@ function App() {
             tileSize: 256,
             encoding: 'terrarium',
             maxzoom: 15,
+            bounds: SOLDEN_BOUNDS,
             attribution:
               '&copy; <a href="https://registry.opendata.aws/terrain-tiles/">AWS Terrain Tiles</a>',
-          },
-          track: {
-            type: 'geojson',
-            data: TRACK_GEOJSON,
-            lineMetrics: true,
           },
         },
         layers: [
           { id: 'topo', type: 'raster', source: 'topo' },
-          {
-            id: 'track-casing',
-            type: 'line',
-            source: 'track',
-            filter: ['==', ['geometry-type'], 'LineString'],
-            paint: { 'line-color': '#ffffff', 'line-width': 7 },
-          },
-          {
-            id: 'track-line',
-            type: 'line',
-            source: 'track',
-            filter: ['==', ['geometry-type'], 'LineString'],
-            layout: {
-              'line-cap': 'round',
-              'line-join': 'round',
-            },
-            paint: {
-              'line-color': '#2a9d8f',
-              'line-width': 4.5,
-              'line-gradient': [
-                'interpolate',
-                ['linear'],
-                ['line-progress'],
-                0, '#e63946',
-                0.17, '#f4a261',
-                0.33, '#e9c46a',
-                0.5, '#2a9d8f',
-                0.67, '#457b9d',
-                0.83, '#5a67d8',
-                1, '#6a4c93',
-              ],
-            },
-          },
-          {
-            id: 'track-start',
-            type: 'circle',
-            source: 'track',
-            filter: ['==', ['get', 'kind'], 'start'],
-            paint: {
-              'circle-radius': 7,
-              'circle-color': '#2a9d8f',
-              'circle-stroke-color': '#ffffff',
-              'circle-stroke-width': 2.5,
-            },
-          },
-          {
-            id: 'track-end',
-            type: 'circle',
-            source: 'track',
-            filter: ['==', ['get', 'kind'], 'end'],
-            paint: {
-              'circle-radius': 7,
-              'circle-color': '#e63946',
-              'circle-stroke-color': '#ffffff',
-              'circle-stroke-width': 2.5,
-            },
-          },
         ],
         terrain: {
           source: 'terrain',
@@ -357,10 +244,10 @@ function App() {
           'atmosphere-blend': 1,
         },
       },
-      center: [10.887, 46.97],
+      center: [10.9933, 46.96],
       zoom: 12.5,
-      pitch: 60,
-      bearing: -20,
+      pitch: 40,
+      bearing: 0,
       maxPitch: 85,
       maxZoom: 19,
       attributionControl: false,
@@ -441,8 +328,7 @@ function App() {
                 0.26,
               ],
             },
-          },
-          'track-casing',
+          }
         )
         map.addLayer(
           {
@@ -465,23 +351,7 @@ function App() {
                 1.5,
               ],
             },
-          },
-          'track-casing',
-        )
-        map.addLayer(
-          {
-            id: 'pistes-area-warning',
-            type: 'line',
-            source: 'pistes',
-            filter: ['all', GEOM_POLYGON, ['get', 'warning']],
-            layout: { 'line-cap': 'round', 'line-join': 'round' },
-            paint: {
-              'line-color': WARNING_COLOR_MATCH,
-              'line-width': 2.5,
-              'line-dasharray': WARNING_DASH,
-            },
-          },
-          'track-casing',
+          }
         )
         map.addLayer(
           {
@@ -503,8 +373,7 @@ function App() {
                 6,
               ],
             },
-          },
-          'track-casing',
+          }
         )
         map.addLayer(
           {
@@ -518,8 +387,7 @@ function App() {
               'line-width': 3,
               'line-opacity': 0.95,
             },
-          },
-          'track-casing',
+          }
         )
         map.addLayer(
           {
@@ -533,8 +401,7 @@ function App() {
               'line-width': 3,
               'line-dasharray': WARNING_DASH,
             },
-          },
-          'track-casing',
+          }
         )
         map.addLayer(
           {
@@ -549,7 +416,7 @@ function App() {
               'text-font': ['Noto Sans Bold'],
               'text-size': 11,
               'text-letter-spacing': 0.08,
-              'text-allow-overlap': true,
+              'text-allow-overlap': false,
               'text-optional': true,
             },
             paint: {
@@ -557,8 +424,7 @@ function App() {
               'text-halo-color': '#ffffff',
               'text-halo-width': 1.5,
             },
-          },
-          'track-casing',
+          }
         )
         map.addLayer(
           {
@@ -567,18 +433,7 @@ function App() {
             source: 'pistes',
             filter: GEOM_LINE,
             paint: { 'line-color': 'rgba(0, 0, 0, 0)', 'line-width': 18 },
-          },
-          'track-casing',
-        )
-        map.addLayer(
-          {
-            id: 'pistes-hit-area',
-            type: 'fill',
-            source: 'pistes',
-            filter: GEOM_POLYGON,
-            paint: { 'fill-color': 'rgba(0, 0, 0, 0)' },
-          },
-          'track-casing',
+          }
         )
 
         map.addLayer(
@@ -592,8 +447,7 @@ function App() {
               'line-width': 2.5,
               'line-dasharray': [2, 1.5],
             },
-          },
-          'track-casing',
+          }
         )
         map.addLayer(
           {
@@ -601,8 +455,7 @@ function App() {
             type: 'line',
             source: 'lifts',
             paint: { 'line-color': 'rgba(0, 0, 0, 0)', 'line-width': 18 },
-          },
-          'track-casing',
+          }
         )
 
         let selectedPisteId = null
@@ -641,7 +494,7 @@ function App() {
         }
 
         map.on('click', 'pistes-hit-line', handlePisteClick)
-        map.on('click', 'pistes-hit-area', handlePisteClick)
+        map.on('click', 'pistes-area-fill', handlePisteClick)
 
         map.on('click', 'lifts-hit', (e) => {
           const p = e.features[0].properties
@@ -658,7 +511,7 @@ function App() {
 
         map.on('click', (e) => {
           const hit = map.queryRenderedFeatures(e.point, {
-            layers: ['pistes-hit-line', 'pistes-hit-area', 'lifts-hit'],
+            layers: ['pistes-hit-line', 'pistes-area-fill', 'lifts-hit'],
           })
           if (hit.length === 0 && selectedPisteId !== null) {
             map.setFeatureState(
@@ -671,7 +524,7 @@ function App() {
 
         for (const layerId of [
           'pistes-hit-line',
-          'pistes-hit-area',
+          'pistes-area-fill',
           'lifts-hit',
         ]) {
           map.on('mouseenter', layerId, () => {
