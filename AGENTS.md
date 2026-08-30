@@ -3,6 +3,9 @@
 PWA do przeglądania map zimowych (OpenStreetMap/OpenSnowMap) na smartfonie i komputerze.
 Silnik: **MapLibre GL** + **React 19** + **Vite**. Cała logika mapy jest w jednym pliku `src/App.jsx`.
 
+> **Zasada:** ten dokument (`AGENTS.md`) należy **zaktualizować przed każdym commitem** —
+> każda zmiana w kodzie (funkcje, warstwy, decyzje, konfiguracja) musi być tu odzwierciedlona.
+
 ---
 
 ## 1. Cel projektu
@@ -11,8 +14,9 @@ Silnik: **MapLibre GL** + **React 19** + **Vite**. Cała logika mapy jest w jedn
 - Docelowo: wyciągać informacje o nartostradach (nazwa, trudność, długość, nachylenie),
   nagrywać pozycję GPS i ustalać, które trasy zostały „zaliczone".
 
-**Stan dzisiejszy:** zrealizowana jest wizualizacja + interakcja z trasami (klik, etykiety,
-zaznaczanie, kolorowanie wg trudności i ratrakowania). GPS/długości/nachylenia to **następne kroki**
+**Stan dzisiejszy:** zrealizowana jest wizualizacja + interakcja (klik, etykiety, zaznaczanie,
+kolorowanie wg trudności i ratrakowania) oraz **menu/spis treści** z wyszukiwarką, grupowaniem po
+ośrodkach i deduplikacją tras. GPS/długości/nachylenia to **następne kroki**
 (nie zaimplementowane — patrz sekcja 16).
 
 ---
@@ -28,7 +32,7 @@ zaznaczanie, kolorowanie wg trudności i ratrakowania). GPS/długości/nachyleni
 
 ```bash
 npm run dev       # serwer dev (Vite)
-npm run build     # build produkcyjny do dist/
+npm run build     # build produkcyjny do docs/
 npm run lint      # oxlint
 npm run preview   # podgląd buildu
 ```
@@ -39,7 +43,7 @@ npm run preview   # podgląd buildu
 
 | Plik | Rola |
 | --- | --- |
-| `src/App.jsx` | Cała aplikacja: mapa, źródła, warstwy, interakcje, cache |
+| `src/App.jsx` | Cała aplikacja: mapa, źródła, warstwy, interakcje, menu, cache |
 | `src/main.jsx` | Punkt wejścia React (StrictMode) |
 | `src/App.css` | Style mapy + popupów |
 | `src/index.css` | Style globalne (reset wysokości, font) |
@@ -57,7 +61,7 @@ npm run preview   # podgląd buildu
 | --- | --- | --- | --- |
 | OpenTopoMap | `https://a.tile.opentopomap.org/{z}/{x}/{y}.png` | raster | Podkład (`source: topo`) |
 | AWS Terrain Tiles | `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png` | raster-dem (terrarium) | Teren 3D (`source: terrain`) |
-| Overpass API | `https://overpass-api.de/api/interpreter` | JSON | Trasy + wyciągi (wektorowo) |
+| Overpass API | `https://overpass-api.de/api/interpreter` | JSON | Trasy + wyciągi + relacje ośrodków `site=piste` (wektorowo) |
 | MapLibre demo fonts | `https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf` | glyphs | Etykiety tras (`glyphs`) |
 
 > **Ważne:** warstwa `pistes` była kiedyś rastrowymi kafelkami PNG OpenSnowMap
@@ -68,7 +72,7 @@ npm run preview   # podgląd buildu
 
 ## 5. Konfiguracja mapy
 
-Definiowana w `new Map({...})` w `src/App.jsx`:
+Definiowana w `new MapLibreMap({...})` w `src/App.jsx`:
 
 - `center: [10.9933, 46.96]` — okolice Sölden (Austria)
 - `zoom: 12.5`, `pitch: 40`, `bearing: 0` (północ u góry)
@@ -109,11 +113,15 @@ Definiowana w `new Map({...})` w `src/App.jsx`:
   way["piste:type"](46.85,10.75,47.10,11.05);
   relation["piste:type"](46.85,10.75,47.10,11.05);
   way["aerialway"](46.85,10.75,47.10,11.05);
+  relation["site"="piste"](46.85,10.75,47.10,11.05);
 );
 out body geom;
 ```
 
 2. `overpassToLayers(data)` przekształca odpowiedź na dwa FeatureCollection: `pistes` i `lifts`.
+   Dodatkowo rozwiązuje **przynależność do ośrodka** (`site`) na podstawie relacji `site=piste`:
+   - członek (way/relation) → nazwa ośrodka (z `site=piste`),
+   - zagnieżdżenie: `way` → relacja `route=piste` → `site=piste` (funkcja `siteFor`).
 
 3. `pistes` trafia do źródła `pistes` (`promoteId: 'uid'` — do feature-state),
    `lifts` do źródła `lifts`.
@@ -156,6 +164,9 @@ W `overpassToLayers` odrzucane są:
 | `pisteType` | `piste:type` (surowy) |
 | `grooming` | `piste:grooming` |
 | `warning` | `grooming === 'backcountry' \|\| grooming === 'mogul'` |
+| `site` | nazwa ośrodka (z relacji `site=piste`) albo `null` — do grupowania w menu |
+
+Właściwości wyciągu są prostsze: `uid`, `osmId`, `name`, `aerialway`, `site`.
 
 ---
 
@@ -199,7 +210,8 @@ Kolejność dodawania = kolejność rysowania (pierwsza na spodzie, ostatnia na 
 | `pistes-warning-stripe` | line | `pistes` | paski ostrzegawcze na linii (tylko `warning`) |
 | `pistes-labels` | symbol | `pistes` | numery/nazwy wzdłuż linii |
 | `pistes-hit-line` | line | `pistes` | niewidoczny cel kliknięcia linii (szer. 18) |
-| `lifts-line` | line | `lifts` | wyciągi — czerwona przerywana linia `#dc2626`, szer. 2.5, dash `[2, 1.5]` |
+| `lifts-line` | line | `lifts` | wyciągi — czerwona przerywana linia `#dc2626`, szer. 2.5, dash `[2, 1.5]` (żółta i grubsza przy zaznaczeniu) |
+| `lifts-labels` | symbol | `lifts` | nazwy wyciągów (`symbol-placement: line-center`) |
 | `lifts-hit` | line | `lifts` | niewidoczny cel kliknięcia (szer. 18) |
 
 > **Usunięte warstwy** (historia): `pistes-area-warning` (paski na obrysie wielokąta) i
@@ -225,6 +237,12 @@ Kolejność dodawania = kolejność rysowania (pierwsza na spodzie, ostatnia na 
 - `text-allow-overlap: false`, `text-optional: true` (napisy nie nachodzą na siebie)
 - biała obwódka (`text-halo-*`), kolor tekstu `#0f172a`
 
+### Etykiety wyciągów (`lifts-labels`)
+
+- `symbol-placement: line-center` — jedna nazwa w środku linii wyciągu,
+- `text-field: ['get', 'name']`, `text-font: ['Noto Sans Bold']`, `text-size: 11`,
+- ciemnoczerwony tekst `#7f1d1d` z białym halo.
+
 ---
 
 ## 10. Interakcje
@@ -232,10 +250,11 @@ Kolejność dodawania = kolejność rysowania (pierwsza na spodzie, ostatnia na 
 ### Zaznaczenie (feature-state)
 
 - Zaznaczenie realizowane przez `feature-state` (nie osobne źródło).
-- `pistes` ma `promoteId: 'uid'`, więc `feature.id` = `uid`.
-- Kliknięcie ustawia `{ selected: true }` na poprzednim (wygasza) i nowym feature.
+- `pistes` i `lifts` mają `promoteId: 'uid'`, więc `feature.id` = `uid`.
+- `selectFeature(source, ids)` wygasza poprzednią grupę i ustawia `{ selected: true }` na wszystkich
+  elementach nowej grupy. Dzięki temu jedna trasa może składać się z wielu zaznaczonych odcinków.
 - Warstwy reagują na `['feature-state', 'selected']` (case): obwódka żółta `#facc15`, grubsza,
-  a dla wielokątów mocniejszy `fill-opacity`.
+  a dla wielokątów mocniejszy `fill-opacity`; wyciąg staje się żółty i grubszy.
 - Klik w puste miejsce czyści zaznaczenie (query po warstwach hit).
 
 ### Klik / popup
@@ -253,18 +272,36 @@ Kolejność dodawania = kolejność rysowania (pierwsza na spodzie, ostatnia na 
   linie szer. 18 px (`pistes-hit-line`, `lifts-hit`). Wielokąty klika się po prostu w `pistes-area-fill`
   (całe wnętrze — osobna hit-area została scalona z fill).
 
+### Menu / spis treści
+
+- Przycisk `☰` w lewym górnym rogu otwiera wysuwany, ciemny sidebar.
+- Lista zawiera trasy i wyciągi oraz wyszukiwarkę działającą po nazwie/numerze.
+- Elementy są deduplikowane i grupowane po `site` + numerze/nazwie. Odcinki tej samej trasy mają
+  wspólny wpis i wspólnie się zaznaczają.
+- Kolejność sekcji: **Sölden**, pozostałe ośrodki alfabetycznie, **Inne** na końcu.
+- Badge `trasa` używa koloru trudności; badge `wyciąg` jest fioletowy `#7c3aed`.
+- Pojedynczy klik zaznacza element i uruchamia pięć mignięć (`blinkSelection`, co 180 ms), kończąc
+  na stałym zaznaczeniu.
+- Double-click wykonuje `fitBounds` dla wszystkich odcinków elementu, bez ręcznego ustawiania mapy
+  przez pojedynczy klik. Używane opcje: `padding: 80`, `maxZoom: 13`, zachowanie bieżącego
+  `bearing` i `pitch`.
+
 ---
 
 ## 11. Cache (Overpass)
 
-- Dane cache'owane w **`localStorage`** pod kluczem `maptest:ski-data:v1`.
+- Dane cache'owane w **`localStorage`** pod kluczem `maptest:ski-data:v2`.
 - TTL: **24 h** (`SKI_CACHE_TTL_MS`).
 - Logika w `loadSkiData()`:
   - cache świeży → użyj cache (bez fetch),
   - przeterminowany → fetch i zapisz,
   - fetch nieudany + cache istnieje (nawet stary) → użyj cache jako fallback.
-- Żeby wymusić ponowne pobranie: wyczyść klucz w localStorage albo podbij `v1` w `SKI_CACHE_KEY`.
+- Żeby wymusić ponowne pobranie: wyczyść klucz w localStorage albo podbij `v2` w `SKI_CACHE_KEY`.
 - Działa identycznie na desktopie i w PWA (to zwykłe localStorage).
+
+Cache przechowuje surową odpowiedź Overpass, a przy kolejnym uruchomieniu jest ona ponownie
+przekształcana przez `overpassToLayers`. Podbicie wersji klucza jest konieczne, gdy zmienia się
+zapytanie lub format przetwarzanych danych.
 
 ---
 
@@ -329,6 +366,14 @@ Po pushu GitHub Pages automatycznie serwuje zawartość `docs/`.
 15. **Optymalizacja warstw:** `pistes-hit-area` scalona z `pistes-area-fill`, usunięta
     `pistes-area-warning`, `text-allow-overlap: false`. Z 16 warstw zeszliśmy do 11.
 16. **Kamera startowa:** `center [10.9933, 46.96]`, `pitch 40`, `bearing 0` (północ u góry).
+17. **Ośrodki:** dodane relacje `site=piste`; przynależność rozwiązywana bezpośrednio lub przez
+    `route=piste`, a menu grupuje po ośrodku i numerze/nazwie.
+18. **Menu:** wyszukiwarka, deduplikacja odcinków, zaznaczanie całych grup, etykiety wyciągów,
+    badge tras wg trudności i fioletowy badge wyciągów.
+19. **Double-click menu:** pojedynczy klik tylko zaznacza i mruga pięć razy; double-click wykonuje
+    `fitBounds` z `maxZoom 13`, `padding 80`, bez resetowania pitch/bearing.
+20. **Błąd MapLibre:** import `Map` zmieniony na `MapLibreMap`, żeby nie przesłaniać wbudowanego
+    `Map` używanego do grupowania danych i indeksów.
 
 ---
 
@@ -342,6 +387,6 @@ Po pushu GitHub Pages automatycznie serwuje zawartość `docs/`.
 - **„Zaliczenie" tras** — dopasowanie śladu GPS do geometrii tras (bufor ~20–30 m, próg pokrycia,
   ewentualnie map-matching/snapping). Pomocne: `nearestPointOnLine`, `lineChunk`, `buffer`,
   `booleanPointInPolygon` z turf.
-- **Relacje multipolygon** i obszary `site=piste` — uproszczone (obszary wykrywane tylko po
-  zamkniętej geometrii pojedynczego elementu).
+- **Relacje multipolygon** — uproszczone (obszary wykrywane tylko po zamkniętej geometrii
+  pojedynczego elementu); `site=piste` jest obecnie używane do przypisywania ośrodka.
 - Brak backendu — wszystko po stronie klienta (Overpass + localStorage).
