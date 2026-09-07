@@ -837,6 +837,12 @@ function buildRouteGraph(features, map, extraPoints) {
         toPoint.location - fromPoint.location,
       )
       if (!from || !to || segmentDistance <= 0) continue
+      const isBlackPiste =
+        feature.kind === 'trasa' &&
+        (feature.properties.difficulty === 'advanced' ||
+          feature.properties.difficulty === 'expert')
+      const isUngroomedPiste =
+        feature.kind === 'trasa' && feature.properties.warning
       const liftEdge = {
         to,
         featureUid: feature.uid,
@@ -848,6 +854,8 @@ function buildRouteGraph(features, map, extraPoints) {
         kind: feature.kind,
         distance: segmentDistance,
         transferDistance: 0,
+        blackDistance: isBlackPiste ? segmentDistance : 0,
+        ungroomedDistance: isUngroomedPiste ? segmentDistance : 0,
         liftCount: feature.kind === 'wyciąg' ? 1 : 0,
         downhillLiftCount: 0,
       }
@@ -890,6 +898,8 @@ function buildRouteGraph(features, map, extraPoints) {
       ],
       distance: connection.distance,
       transferDistance: connection.distance,
+      blackDistance: 0,
+      ungroomedDistance: 0,
       liftCount: 0,
       downhillLiftCount: 0,
     })
@@ -912,9 +922,9 @@ function findRoute(graph) {
   const end = graph.extraNodeIds.end
   if (!start || !end) return null
 
-  const distances = new Map([[start, [0, 0, 0, 0]]])
+  const distances = new Map([[start, [0, 0, 0, 0, 0, 0]]])
   const previous = new Map()
-  const queue = [{ node: start, cost: [0, 0, 0, 0] }]
+  const queue = [{ node: start, cost: [0, 0, 0, 0, 0, 0] }]
 
   while (queue.length) {
     queue.sort((a, b) => compareRouteCost(a.cost, b.cost))
@@ -928,8 +938,10 @@ function findRoute(graph) {
       const nextCost = [
         current.cost[0] + edge.downhillLiftCount,
         current.cost[1] + edge.liftCount,
-        current.cost[2] + edge.transferDistance,
-        current.cost[3] + edge.distance,
+        current.cost[2] + edge.ungroomedDistance,
+        current.cost[3] + edge.blackDistance,
+        current.cost[4] + edge.transferDistance,
+        current.cost[5] + edge.distance,
       ]
       const previousCost = distances.get(edge.to)
       if (!previousCost || compareRouteCost(nextCost, previousCost) < 0) {
@@ -1089,11 +1101,22 @@ function App() {
     return nearest && nearest.distance <= ROUTE_SNAP_RADIUS_M ? nearest : null
   }
 
-  function handleRouteMapClick(lngLat) {
+  function handleRouteMapClick(lngLat, clickedLiftUid = null) {
     const map = mapRef.current
     if (!map || !routeModeRef.current) return
 
-    const snap = findNearestPiste([lngLat.lng, lngLat.lat])
+    const clickCoordinates = [lngLat.lng, lngLat.lat]
+    let snap = findNearestPiste(clickCoordinates)
+    if (clickedLiftUid) {
+      const lift = routeFeaturesRef.current.get(clickedLiftUid)
+      if (lift) {
+        const liftPoint = nearestRoutePoint(lift, clickCoordinates)
+        const liftSnap = findNearestPiste(liftPoint.coordinate)
+        if (liftSnap && (!snap || liftSnap.distance < snap.distance)) {
+          snap = liftSnap
+        }
+      }
+    }
     if (!snap) {
       setRouteMessage('Kliknij w liniową trasę, maksymalnie 100 m od niej')
       return
@@ -1799,13 +1822,14 @@ function App() {
             lng: e.lngLat.lng,
             lat: e.lngLat.lat,
           })
-          if (routeModeRef.current) {
-            handleRouteMapClick(e.lngLat)
-            return
-          }
           const hit = map.queryRenderedFeatures(e.point, {
             layers: ['pistes-hit-line', 'pistes-area-fill', 'lifts-hit'],
           })
+          if (routeModeRef.current) {
+            const liftHit = hit.find((feature) => feature.layer.id === 'lifts-hit')
+            handleRouteMapClick(e.lngLat, liftHit?.id)
+            return
+          }
           if (hit.length === 0) {
             clearSelection()
           }
@@ -1845,7 +1869,7 @@ function App() {
   const routeSummary = routeStepLabels.join(' → ')
   const routeDownhillLiftCount = routeResult?.cost[0] ?? 0
   const routeLiftCount = routeResult?.cost[1] ?? 0
-  const routeDistance = routeResult?.cost[3] ?? 0
+  const routeDistance = routeResult?.cost[5] ?? 0
   const routeButtonLabel = routeResult
     ? 'Wyczyść trasę'
     : routeMode

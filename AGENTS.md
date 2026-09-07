@@ -303,6 +303,8 @@ Kolejność dodawania = kolejność rysowania (pierwsza na spodzie, ostatnia na 
 
 - Przycisk trasy znajduje się pod menu. Pierwszy prawidłowy klik na liniowej trasie ustawia start,
   drugi ustawia cel i od razu uruchamia routing. Punkty są przyciągane do trasy w promieniu 100 m.
+  Jeśli kliknięcie trafi w wyciąg, najbliższy punkt jego geometrii jest używany jako kotwica do
+  znalezienia najbliższej trasy, ale wyciąg nadal nie jest wybierany jako punkt nawigacji.
 - W trybie trasy kliknięcia mapy nie otwierają popupów ani zwykłego zaznaczenia; menu pozostaje
   niezależne. Kliknięcie wyłącznika anuluje wybór lub czyści gotową trasę.
 - Routing używa wyłącznie liniowych tras i wyciągów. Trasy są skierowane w dół, a wyciągi normalnie
@@ -313,7 +315,10 @@ Kolejność dodawania = kolejność rysowania (pierwsza na spodzie, ostatnia na 
   przecięcia lub zbliżenia do 100 m powstają node’y na obu trasach; wysokość punktów jest odczytywana
   z DEM przez `queryTerrainElevation`.
 - Koszt jest leksykograficzny: najpierw liczba zjazdów wyciągiem, potem całkowita liczba wyciągów,
-  długość połączeń i na końcu długość całkowita. Trudność trasy nie wpływa na wybór.
+  długość odcinków nieratrakowanych lub z muldami (`warning`), długość odcinków czarnych
+  (`advanced`/`expert`), długość połączeń i na końcu długość całkowita. Dzięki temu routing
+  wybiera czarną trasę zamiast dodatkowego wyciągu, ale wśród wariantów o tej samej liczbie
+  wyciągów unika najpierw tras nieratrakowanych, a następnie czarnych.
 - Ślad nawigacyjny jest rysowany przez osobne źródło i warstwy `route-path`, więc obejmuje tylko
   faktycznie przejechane fragmenty tras. Trasy mają kolor `#1557b0` i szerokość 6 px, a wyciągi
   `#7c3aed` z kreskowaniem i szerokością 6 px.
@@ -418,10 +423,13 @@ Po pushu GitHub Pages automatycznie serwuje zawartość `docs/`.
 19. **Double-click menu:** pojedynczy klik tylko zaznacza i mruga pięć razy; double-click wykonuje
     `fitBounds` z `maxZoom 13`, `padding 80`, bez resetowania pitch/bearing.
 20. **Błąd MapLibre:** import `Map` zmieniony na `MapLibreMap`, żeby nie przesłaniać wbudowanego
-     `Map` używanego do grupowania danych i indeksów.
-21. **Nawigacja:** dodano lokalny graf tras liniowych i wyciągów, snapowanie startu/celu do 100 m,
-    wykrywanie bliskich odcinków tras i połączenia do 100 m, routing preferujący zjazd zamiast jazdy
-    wyciągiem w dół oraz niezależny ślad na osobnych warstwach, ograniczony do przejechanych
+    `Map` używanego do grupowania danych i indeksów.
+21. **Nawigacja:** dodano lokalny graf tras liniowych i wyciągów, snapowanie startu/celu do 100 m
+    oraz fallback z wyciągu do najbliższej trasy przy kliknięciu w jego hit-area, wykrywanie
+    bliskich odcinków tras i połączenia do 100 m, routing preferujący zjazd zamiast jazdy
+    wyciągiem w dół; wśród wariantów o tej samej liczbie wyciągów routing unika najpierw
+    nieratrakowanych, a następnie czarnych tras. Ślad jest rysowany na osobnych warstwach,
+    ograniczony do przejechanych
     fragmentów, z niebieskimi trasami, fioletowymi wyciągami i zwijanym podsumowaniem.
 22. **Pinezka domu:** dodano stały marker SVG ze znaczkiem domu na współrzędnych
     `46°58'21.6"N 11°00'34.2"E`.
