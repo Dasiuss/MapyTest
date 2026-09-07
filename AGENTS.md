@@ -79,7 +79,7 @@ npm run preview   # podgląd buildu
 Definiowana w `new MapLibreMap({...})` w `src/App.jsx`:
 
 - `center: [10.977123714520985, 46.95802633395613]` — okolice Sölden (Austria)
-- `zoom: 13`, `pitch: 40`, `bearing: -90` (zachód u góry)
+- `zoom: 13` na komputerze i `zoom: 12` na telefonie (breakpoint `768px`), `pitch: 40`, `bearing: -90` (zachód u góry)
 - `maxPitch: 85`, `maxZoom: 19`
 - `terrain: { source: 'terrain', exaggeration: 0.6 }` — wyolbrzymienie terenu 0.6
 - `sky` — niebo/fog (kolory `#a5d6f5`, `#f0f6fa`, `#e8eef2`), `horizon-fog-blend`/`fog-ground-blend` 0.4
@@ -408,8 +408,9 @@ Po pushu GitHub Pages automatycznie serwuje zawartość `docs/`.
 14. **Ślad testowy usunięty** całkowicie.
 15. **Optymalizacja warstw:** `pistes-hit-area` scalona z `pistes-area-fill`, usunięta
     `pistes-area-warning`, `text-allow-overlap: false`. Z 16 warstw zeszliśmy do 11.
-16. **Kamera startowa:** `center [10.977123714520985, 46.95802633395613]`, `zoom 13`,
-    `pitch 40`, `bearing -90` (zachód u góry).
+16. **Kamera startowa:** `center [10.977123714520985, 46.95802633395613]`, `zoom 13` na
+    komputerze i `zoom 12` na telefonie (breakpoint `768px`), `pitch 40`, `bearing -90`
+    (zachód u góry).
 17. **Ośrodki:** dodane relacje `site=piste`; przynależność rozwiązywana bezpośrednio lub przez
     `route=piste`, a menu grupuje po ośrodku i numerze/nazwie.
 18. **Menu:** wyszukiwarka, deduplikacja odcinków, zaznaczanie całych grup, etykiety wyciągów,

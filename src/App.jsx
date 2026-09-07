@@ -1246,6 +1246,7 @@ function App() {
   useEffect(() => {
     if (mapRef.current) return
 
+    const initialZoom = window.matchMedia('(max-width: 768px)').matches ? 12 : 13
     const map = new MapLibreMap({
       container: mapContainer.current,
       style: {
@@ -1289,7 +1290,7 @@ function App() {
         },
       },
       center: [10.977123714520985, 46.95802633395613],
-      zoom: 13,
+      zoom: initialZoom,
       pitch: 40,
       bearing: -90,
       maxPitch: 85,
