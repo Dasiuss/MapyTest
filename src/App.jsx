@@ -1,4 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
+import distance from '@turf/distance'
+import { point } from '@turf/helpers'
 import {
   Map as MapLibreMap,
   NavigationControl,
@@ -7,6 +9,7 @@ import {
   FullscreenControl,
   setWorkerUrl,
   Popup,
+  Marker,
 } from 'maplibre-gl'
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 import 'maplibre-gl/dist/maplibre-gl.css'
@@ -38,7 +41,7 @@ out body geom;
 
 const DIFFICULTY_COLORS = {
   novice: '#22c55e',
-  easy: '#3b82f6',
+  easy: '#60a5fa',
   intermediate: '#ef4444',
   advanced: '#111827',
   expert: '#f97316',
@@ -59,6 +62,12 @@ const WARNING_COLOR_MATCH = [
   '#374151',
 ]
 const WARNING_DASH = [2, 10]
+const ROUTE_SNAP_RADIUS_M = 100
+const ROUTE_CONNECT_RADIUS_M = 100
+const ROUTE_ELEVATION_TOLERANCE_M = 15
+const ROUTE_COLOR = '#1557b0'
+const METERS_PER_DEGREE = 111320
+const HOME_COORDINATES = [11.0095, 46.9726666667]
 
 const GEOM_LINE = ['==', ['geometry-type'], 'LineString']
 const GEOM_POLYGON = ['==', ['geometry-type'], 'Polygon']
@@ -227,6 +236,738 @@ function buildPopupHTML(fields) {
     .join('')
 }
 
+function coordinateDistance(a, b) {
+  return distance(point(a), point(b), { units: 'meters' })
+}
+
+function normalizeRouteFeatures(features, source, kind) {
+  return features
+    .filter(
+      (feature) =>
+        feature.geometry?.type === 'LineString' &&
+        feature.geometry.coordinates.length >= 2,
+    )
+    .map((feature) => {
+      const coordinates = feature.geometry.coordinates
+      const segments = []
+      let length = 0
+      let west = Infinity
+      let south = Infinity
+      let east = -Infinity
+      let north = -Infinity
+
+      for (let i = 0; i < coordinates.length; i += 1) {
+        const [lng, lat] = coordinates[i]
+        west = Math.min(west, lng)
+        south = Math.min(south, lat)
+        east = Math.max(east, lng)
+        north = Math.max(north, lat)
+        if (i === 0) continue
+        const segmentLength = coordinateDistance(
+          coordinates[i - 1],
+          coordinates[i],
+        )
+        segments.push({
+          start: coordinates[i - 1],
+          end: coordinates[i],
+          location: length,
+          length: segmentLength,
+          bbox: [
+            Math.min(coordinates[i - 1][0], coordinates[i][0]),
+            Math.min(coordinates[i - 1][1], coordinates[i][1]),
+            Math.max(coordinates[i - 1][0], coordinates[i][0]),
+            Math.max(coordinates[i - 1][1], coordinates[i][1]),
+          ],
+        })
+        length += segmentLength
+      }
+
+      return {
+        uid: feature.properties.uid,
+        source,
+        kind,
+        properties: feature.properties,
+        coordinates,
+        segments,
+        bbox: [west, south, east, north],
+        length,
+      }
+    })
+    .filter((feature) => feature.length > 0)
+}
+
+function routeFeatureLabel(feature) {
+  if (feature.kind === 'trasa') {
+    return feature.properties.label || feature.properties.name || 'Trasa'
+  }
+  return feature.properties.name || 'Wyciąg'
+}
+
+function terrainElevation(map, coordinates) {
+  try {
+    const elevation = map.queryTerrainElevation(coordinates, {
+      exaggerated: false,
+    })
+    return Number.isFinite(elevation) ? elevation : null
+  } catch {
+    return null
+  }
+}
+
+function isWithinRouteBounds(coordinates, feature, radius) {
+  const [lng, lat] = coordinates
+  const latRadius = radius / METERS_PER_DEGREE
+  const lngRadius =
+    radius /
+    (METERS_PER_DEGREE * Math.max(Math.cos((lat * Math.PI) / 180), 0.1))
+  return (
+    lng >= feature.bbox[0] - lngRadius &&
+    lng <= feature.bbox[2] + lngRadius &&
+    lat >= feature.bbox[1] - latRadius &&
+    lat <= feature.bbox[3] + latRadius
+  )
+}
+
+function areBboxesWithinDistance(first, second, radius) {
+  const latitude =
+    (first[1] + first[3] + second[1] + second[3]) / 4
+  const latRadius = radius / METERS_PER_DEGREE
+  const lngRadius =
+    radius /
+    (METERS_PER_DEGREE * Math.max(Math.cos((latitude * Math.PI) / 180), 0.1))
+  return !(
+    first[2] + lngRadius < second[0] ||
+    second[2] + lngRadius < first[0] ||
+    first[3] + latRadius < second[1] ||
+    second[3] + latRadius < first[1]
+  )
+}
+
+function closestSegmentPoints(firstSegment, secondSegment) {
+  const origin = firstSegment.start
+  const latitude =
+    (firstSegment.start[1] +
+      firstSegment.end[1] +
+      secondSegment.start[1] +
+      secondSegment.end[1]) /
+    4
+  const lngScale =
+    METERS_PER_DEGREE * Math.max(Math.cos((latitude * Math.PI) / 180), 0.1)
+  const toLocal = ([lng, lat]) => [
+    (lng - origin[0]) * lngScale,
+    (lat - origin[1]) * METERS_PER_DEGREE,
+  ]
+  const firstStart = [0, 0]
+  const firstEnd = toLocal(firstSegment.end)
+  const secondStart = toLocal(secondSegment.start)
+  const secondEnd = toLocal(secondSegment.end)
+  const firstDirection = [
+    firstEnd[0] - firstStart[0],
+    firstEnd[1] - firstStart[1],
+  ]
+  const secondDirection = [
+    secondEnd[0] - secondStart[0],
+    secondEnd[1] - secondStart[1],
+  ]
+
+  const cross = (a, b) => a[0] * b[1] - a[1] * b[0]
+  const subtract = (a, b) => [a[0] - b[0], a[1] - b[1]]
+  const pointOnSegment = (point, start, end) => {
+    const direction = subtract(end, start)
+    const lengthSquared =
+      direction[0] * direction[0] + direction[1] * direction[1]
+    const position = subtract(point, start)
+    const ratio =
+      lengthSquared === 0
+        ? 0
+        : Math.max(
+            0,
+            Math.min(
+              1,
+              (position[0] * direction[0] + position[1] * direction[1]) /
+                lengthSquared,
+            ),
+          )
+    return {
+      ratio,
+      point: [
+        start[0] + direction[0] * ratio,
+        start[1] + direction[1] * ratio,
+      ],
+    }
+  }
+
+  const candidates = []
+  const addCandidate = (firstRatio, secondRatio) => {
+    const firstPoint = [
+      firstStart[0] + firstDirection[0] * firstRatio,
+      firstStart[1] + firstDirection[1] * firstRatio,
+    ]
+    const secondPoint = [
+      secondStart[0] + secondDirection[0] * secondRatio,
+      secondStart[1] + secondDirection[1] * secondRatio,
+    ]
+    const difference = subtract(firstPoint, secondPoint)
+    candidates.push({
+      firstRatio,
+      secondRatio,
+      distance: Math.hypot(difference[0], difference[1]),
+    })
+  }
+
+  const offset = subtract(secondStart, firstStart)
+  const denominator = cross(firstDirection, secondDirection)
+  if (Math.abs(denominator) > 1e-9) {
+    const firstRatio = cross(offset, secondDirection) / denominator
+    const secondRatio = cross(offset, firstDirection) / denominator
+    if (
+      firstRatio >= 0 &&
+      firstRatio <= 1 &&
+      secondRatio >= 0 &&
+      secondRatio <= 1
+    ) {
+      addCandidate(firstRatio, secondRatio)
+    }
+  }
+
+  addCandidate(
+    pointOnSegment(secondStart, firstStart, firstEnd).ratio,
+    0,
+  )
+  addCandidate(pointOnSegment(secondEnd, firstStart, firstEnd).ratio, 1)
+  addCandidate(0, pointOnSegment(firstStart, secondStart, secondEnd).ratio)
+  addCandidate(1, pointOnSegment(firstEnd, secondStart, secondEnd).ratio)
+
+  const closest = candidates.reduce((best, candidate) =>
+    candidate.distance < best.distance ? candidate : best,
+  )
+  const interpolate = (start, end, ratio) => [
+    start[0] + (end[0] - start[0]) * ratio,
+    start[1] + (end[1] - start[1]) * ratio,
+  ]
+  return {
+    firstLocation:
+      firstSegment.location + firstSegment.length * closest.firstRatio,
+    secondLocation:
+      secondSegment.location + secondSegment.length * closest.secondRatio,
+    firstCoordinate: interpolate(
+      firstSegment.start,
+      firstSegment.end,
+      closest.firstRatio,
+    ),
+    secondCoordinate: interpolate(
+      secondSegment.start,
+      secondSegment.end,
+      closest.secondRatio,
+    ),
+    distance: closest.distance,
+  }
+}
+
+function nearestRoutePoint(feature, coordinates) {
+  const [queryLng, queryLat] = coordinates
+  const lngScale =
+    METERS_PER_DEGREE *
+    Math.max(Math.cos((queryLat * Math.PI) / 180), 0.1)
+  let bestDistanceSquared = Infinity
+  let bestCoordinate = null
+  let bestLocation = 0
+
+  for (const segment of feature.segments) {
+    const ax = (segment.start[0] - queryLng) * lngScale
+    const ay = (segment.start[1] - queryLat) * METERS_PER_DEGREE
+    const bx = (segment.end[0] - queryLng) * lngScale
+    const by = (segment.end[1] - queryLat) * METERS_PER_DEGREE
+    const dx = bx - ax
+    const dy = by - ay
+    const segmentLengthSquared = dx * dx + dy * dy
+    const projection =
+      segmentLengthSquared === 0
+        ? 0
+        : Math.max(0, Math.min(1, -(ax * dx + ay * dy) / segmentLengthSquared))
+    const closestX = ax + dx * projection
+    const closestY = ay + dy * projection
+    const distanceSquared = closestX * closestX + closestY * closestY
+
+    if (distanceSquared < bestDistanceSquared) {
+      bestDistanceSquared = distanceSquared
+      bestCoordinate = [
+        segment.start[0] +
+          (segment.end[0] - segment.start[0]) * projection,
+        segment.start[1] +
+          (segment.end[1] - segment.start[1]) * projection,
+      ]
+      bestLocation = segment.location + segment.length * projection
+    }
+  }
+
+  return {
+    coordinate: bestCoordinate,
+    distance: Math.sqrt(bestDistanceSquared),
+    location: Math.min(bestLocation, feature.length),
+  }
+}
+
+function coordinateAtRouteLocation(feature, location) {
+  if (location <= 0) return feature.coordinates[0]
+  if (location >= feature.length) {
+    return feature.coordinates[feature.coordinates.length - 1]
+  }
+
+  for (const segment of feature.segments) {
+    const segmentEnd = segment.location + segment.length
+    if (location > segmentEnd) continue
+    const portion =
+      segment.length === 0
+        ? 0
+        : (location - segment.location) / segment.length
+    return [
+      segment.start[0] + (segment.end[0] - segment.start[0]) * portion,
+      segment.start[1] + (segment.end[1] - segment.start[1]) * portion,
+    ]
+  }
+  return feature.coordinates[feature.coordinates.length - 1]
+}
+
+function routeFeatureSlice(feature, startLocation, endLocation) {
+  const forward = endLocation >= startLocation
+  const low = Math.min(startLocation, endLocation)
+  const high = Math.max(startLocation, endLocation)
+  const coordinates = [coordinateAtRouteLocation(feature, low)]
+
+  for (const segment of feature.segments) {
+    const vertexLocation = segment.location + segment.length
+    if (vertexLocation > low && vertexLocation < high) {
+      coordinates.push(segment.end)
+    }
+  }
+  coordinates.push(coordinateAtRouteLocation(feature, high))
+
+  return forward ? coordinates : coordinates.reverse()
+}
+
+function routePathFeatures(edges, routeFeatures) {
+  return edges
+    .filter((edge) => edge.geometry?.length >= 2)
+    .map((edge, index) => {
+      const routeFeature = edge.featureUid
+        ? routeFeatures.get(edge.featureUid)
+        : null
+      const label = routeFeature
+        ? routeFeature.properties.name || routeFeature.properties.ref
+        : null
+      const properties = {
+        kind:
+          edge.kind === 'wyciąg'
+            ? 'lift'
+            : edge.kind === 'trasa'
+              ? 'piste'
+              : 'connection',
+        index,
+      }
+      if (label) properties.label = label
+      return {
+        type: 'Feature',
+        properties,
+        geometry: { type: 'LineString', coordinates: edge.geometry },
+      }
+    })
+}
+
+function compareRouteCost(a, b) {
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return a[i] - b[i]
+  }
+  return 0
+}
+
+function buildRouteGraph(features, map, extraPoints) {
+  const featureByUid = new Map(features.map((feature) => [feature.uid, feature]))
+  const pointsByFeature = new Map()
+  const pointNodeIds = new Map()
+  const extraRecords = new Map()
+  const connectionSpecs = []
+
+  const addPoint = (feature, data) => {
+    const points = pointsByFeature.get(feature.uid)
+    const existing = points.find(
+      (candidate) => Math.abs(candidate.location - data.location) <= 1,
+    )
+    if (existing) return existing
+    const pointRecord = { ...data, featureUid: feature.uid }
+    points.push(pointRecord)
+    return pointRecord
+  }
+
+  for (const feature of features) {
+    const start = feature.coordinates[0]
+    const end = feature.coordinates[feature.coordinates.length - 1]
+    const startElevation = terrainElevation(map, start)
+    const endElevation = terrainElevation(map, end)
+    pointsByFeature.set(feature.uid, [
+      {
+        featureUid: feature.uid,
+        coordinate: start,
+        location: 0,
+        elevation: startElevation,
+        endpoint: true,
+        endpointName: 'start',
+      },
+      {
+        featureUid: feature.uid,
+        coordinate: end,
+        location: feature.length,
+        elevation: endElevation,
+        endpoint: true,
+        endpointName: 'end',
+      },
+    ])
+  }
+
+  for (const extra of extraPoints) {
+    const feature = featureByUid.get(extra.uid)
+    if (!feature) continue
+    const points = pointsByFeature.get(feature.uid)
+    const startPoint = points.find((candidate) => candidate.location === 0)
+    const endPoint = points.find(
+      (candidate) => candidate.location === feature.length,
+    )
+    const startElevation = startPoint?.elevation
+    const endElevation = endPoint?.elevation
+    const interpolatedElevation =
+      Number.isFinite(startElevation) && Number.isFinite(endElevation)
+        ? startElevation +
+          (endElevation - startElevation) * (extra.location / feature.length)
+        : terrainElevation(map, extra.coordinate)
+    const pointRecord = addPoint(feature, {
+      coordinate: extra.coordinate,
+      location: extra.location,
+      elevation: interpolatedElevation,
+    })
+    extraRecords.set(extra.id, pointRecord)
+  }
+
+  const endpoints = []
+  for (const feature of features) {
+    const points = pointsByFeature.get(feature.uid)
+    endpoints.push(...points.filter((pointRecord) => pointRecord.endpoint))
+  }
+
+  for (const sourcePoint of endpoints) {
+    const sourceFeature = featureByUid.get(sourcePoint.featureUid)
+    for (const targetFeature of features) {
+      if (targetFeature.uid === sourceFeature.uid) continue
+      if (
+        sourceFeature.kind !== 'wyciąg' &&
+        targetFeature.kind !== 'wyciąg'
+      ) {
+        continue
+      }
+      if (
+        !isWithinRouteBounds(
+          sourcePoint.coordinate,
+          targetFeature,
+          ROUTE_CONNECT_RADIUS_M,
+        )
+      ) {
+        continue
+      }
+
+      let targetPoint
+      let connectionDistance
+      const targetPoints = pointsByFeature.get(targetFeature.uid)
+
+      if (targetFeature.kind === 'wyciąg') {
+        const nearestEndpoint = targetPoints
+          .filter((candidate) => candidate.endpoint)
+          .map((candidate) => ({
+            candidate,
+            distance: coordinateDistance(
+              sourcePoint.coordinate,
+              candidate.coordinate,
+            ),
+          }))
+          .sort((a, b) => a.distance - b.distance)[0]
+        if (!nearestEndpoint) continue
+        targetPoint = nearestEndpoint.candidate
+        connectionDistance = nearestEndpoint.distance
+      } else {
+        const nearest = nearestRoutePoint(
+          targetFeature,
+          sourcePoint.coordinate,
+        )
+        if (nearest.distance > ROUTE_CONNECT_RADIUS_M) continue
+        targetPoint = addPoint(targetFeature, {
+          coordinate: nearest.coordinate,
+          location: nearest.location,
+          elevation: terrainElevation(map, nearest.coordinate),
+        })
+        connectionDistance = nearest.distance
+      }
+
+      if (connectionDistance > ROUTE_CONNECT_RADIUS_M) continue
+      connectionSpecs.push({
+        sourcePoint,
+        targetPoint,
+        distance: connectionDistance,
+      })
+    }
+  }
+
+  const pisteFeatures = features.filter((feature) => feature.kind === 'trasa')
+  for (let firstIndex = 0; firstIndex < pisteFeatures.length; firstIndex += 1) {
+    const firstFeature = pisteFeatures[firstIndex]
+    for (
+      let secondIndex = firstIndex + 1;
+      secondIndex < pisteFeatures.length;
+      secondIndex += 1
+    ) {
+      const secondFeature = pisteFeatures[secondIndex]
+      if (
+        !areBboxesWithinDistance(
+          firstFeature.bbox,
+          secondFeature.bbox,
+          ROUTE_CONNECT_RADIUS_M,
+        )
+      ) {
+        continue
+      }
+
+      let closest = null
+      for (const firstSegment of firstFeature.segments) {
+        for (const secondSegment of secondFeature.segments) {
+          if (
+            !areBboxesWithinDistance(
+              firstSegment.bbox,
+              secondSegment.bbox,
+              ROUTE_CONNECT_RADIUS_M,
+            )
+          ) {
+            continue
+          }
+          const candidate = closestSegmentPoints(
+            firstSegment,
+            secondSegment,
+          )
+          if (!closest || candidate.distance < closest.distance) {
+            closest = candidate
+          }
+        }
+      }
+
+      if (!closest || closest.distance > ROUTE_CONNECT_RADIUS_M) continue
+      const firstPoint = addPoint(firstFeature, {
+        coordinate: closest.firstCoordinate,
+        location: closest.firstLocation,
+        elevation: terrainElevation(map, closest.firstCoordinate),
+      })
+      const secondPoint = addPoint(secondFeature, {
+        coordinate: closest.secondCoordinate,
+        location: closest.secondLocation,
+        elevation: terrainElevation(map, closest.secondCoordinate),
+      })
+      connectionSpecs.push(
+        {
+          sourcePoint: firstPoint,
+          targetPoint: secondPoint,
+          distance: closest.distance,
+        },
+        {
+          sourcePoint: secondPoint,
+          targetPoint: firstPoint,
+          distance: closest.distance,
+        },
+      )
+    }
+  }
+
+  const nodes = new Map()
+  const adjacency = new Map()
+  const addEdge = (from, to, edge) => {
+    if (!adjacency.has(from)) adjacency.set(from, [])
+    adjacency.get(from).push(edge)
+  }
+
+  for (const feature of features) {
+    const rawPoints = pointsByFeature.get(feature.uid)
+    const sortedPoints = [...rawPoints].sort(
+      (a, b) => a.location - b.location,
+    )
+    const mergedGroups = []
+    for (const pointRecord of sortedPoints) {
+      const lastGroup = mergedGroups[mergedGroups.length - 1]
+      if (
+        lastGroup &&
+        Math.abs(lastGroup[0].location - pointRecord.location) <= 1
+      ) {
+        lastGroup.push(pointRecord)
+      } else {
+        mergedGroups.push([pointRecord])
+      }
+    }
+
+    for (let i = 0; i < mergedGroups.length; i += 1) {
+      const group = mergedGroups[i]
+      const representative = group[0]
+      const nodeId = `${feature.uid}:${i}`
+      for (const pointRecord of group) pointNodeIds.set(pointRecord, nodeId)
+      nodes.set(nodeId, {
+        coordinate: representative.coordinate,
+        elevation: representative.elevation,
+      })
+    }
+
+    const startElevation = mergedGroups[0][0].elevation
+    const endElevation = mergedGroups[mergedGroups.length - 1][0].elevation
+    let forward = true
+    if (Number.isFinite(startElevation) && Number.isFinite(endElevation)) {
+      forward =
+        feature.kind === 'wyciąg'
+          ? startElevation <= endElevation
+          : startElevation >= endElevation
+    }
+
+    const orderedGroups = forward ? mergedGroups : [...mergedGroups].reverse()
+    for (let i = 1; i < orderedGroups.length; i += 1) {
+      const fromPoint = orderedGroups[i - 1][0]
+      const toPoint = orderedGroups[i][0]
+      const from = pointNodeIds.get(fromPoint)
+      const to = pointNodeIds.get(toPoint)
+      const segmentDistance = Math.abs(
+        toPoint.location - fromPoint.location,
+      )
+      if (!from || !to || segmentDistance <= 0) continue
+      const liftEdge = {
+        to,
+        featureUid: feature.uid,
+        geometry: routeFeatureSlice(
+          feature,
+          fromPoint.location,
+          toPoint.location,
+        ),
+        kind: feature.kind,
+        distance: segmentDistance,
+        transferDistance: 0,
+        liftCount: feature.kind === 'wyciąg' ? 1 : 0,
+        downhillLiftCount: 0,
+      }
+      addEdge(from, to, liftEdge)
+      if (feature.kind === 'wyciąg') {
+        addEdge(to, from, {
+          ...liftEdge,
+          to: from,
+          geometry: routeFeatureSlice(
+            feature,
+            toPoint.location,
+            fromPoint.location,
+          ),
+          downhillLiftCount: 1,
+        })
+      }
+    }
+  }
+
+  for (const connection of connectionSpecs) {
+    const from = pointNodeIds.get(connection.sourcePoint)
+    const to = pointNodeIds.get(connection.targetPoint)
+    if (!from || !to || from === to) continue
+    const sourceElevation = connection.sourcePoint.elevation
+    const targetElevation = connection.targetPoint.elevation
+    if (
+      Number.isFinite(sourceElevation) &&
+      Number.isFinite(targetElevation) &&
+      targetElevation > sourceElevation + ROUTE_ELEVATION_TOLERANCE_M
+    ) {
+      continue
+    }
+    addEdge(from, to, {
+      to,
+      featureUid: null,
+      kind: 'połączenie',
+      geometry: [
+        connection.sourcePoint.coordinate,
+        connection.targetPoint.coordinate,
+      ],
+      distance: connection.distance,
+      transferDistance: connection.distance,
+      liftCount: 0,
+      downhillLiftCount: 0,
+    })
+  }
+
+  for (const [id, pointRecord] of extraRecords) {
+    pointNodeIds.set(pointRecord, pointNodeIds.get(pointRecord))
+    extraRecords.set(id, pointNodeIds.get(pointRecord))
+  }
+
+  return {
+    nodes,
+    adjacency,
+    extraNodeIds: Object.fromEntries(extraRecords),
+  }
+}
+
+function findRoute(graph) {
+  const start = graph.extraNodeIds.start
+  const end = graph.extraNodeIds.end
+  if (!start || !end) return null
+
+  const distances = new Map([[start, [0, 0, 0, 0]]])
+  const previous = new Map()
+  const queue = [{ node: start, cost: [0, 0, 0, 0] }]
+
+  while (queue.length) {
+    queue.sort((a, b) => compareRouteCost(a.cost, b.cost))
+    const current = queue.shift()
+    if (compareRouteCost(current.cost, distances.get(current.node)) !== 0) {
+      continue
+    }
+    if (current.node === end) break
+
+    for (const edge of graph.adjacency.get(current.node) ?? []) {
+      const nextCost = [
+        current.cost[0] + edge.downhillLiftCount,
+        current.cost[1] + edge.liftCount,
+        current.cost[2] + edge.transferDistance,
+        current.cost[3] + edge.distance,
+      ]
+      const previousCost = distances.get(edge.to)
+      if (!previousCost || compareRouteCost(nextCost, previousCost) < 0) {
+        distances.set(edge.to, nextCost)
+        previous.set(edge.to, { node: current.node, edge })
+        queue.push({ node: edge.to, cost: nextCost })
+      }
+    }
+  }
+
+  if (!distances.has(end)) return null
+
+  const edges = []
+  let node = end
+  while (node !== start) {
+    const step = previous.get(node)
+    if (!step) return null
+    edges.push(step.edge)
+    node = step.node
+  }
+  edges.reverse()
+
+  const steps = []
+  for (const edge of edges) {
+    if (edge.featureUid && steps[steps.length - 1] !== edge.featureUid) {
+      steps.push(edge.featureUid)
+    }
+  }
+  if (!steps.length) return null
+
+  return {
+    featureUids: [...new Set(steps)],
+    steps,
+    edges,
+    cost: distances.get(end),
+  }
+}
+
 const SKI_CACHE_KEY = 'maptest:ski-data:v2'
 const SKI_CACHE_TTL_MS = 24 * 60 * 60 * 1000
 
@@ -256,12 +997,166 @@ function App() {
   const mapRef = useRef(null)
   const selectedRef = useRef(null)
   const featuresRef = useRef(new Map())
+  const routeFeaturesRef = useRef(new Map())
+  const routeModeRef = useRef(false)
+  const routePointsRef = useRef({ start: null, end: null })
+  const routeResultRef = useRef(null)
+  const routeMarkersRef = useRef({ start: null, end: null })
   const blinkRef = useRef(0)
 
   const [selected, setSelected] = useState(null)
   const [items, setItems] = useState([])
   const [menuOpen, setMenuOpen] = useState(false)
   const [search, setSearch] = useState('')
+  const [routeMode, setRouteMode] = useState(false)
+  const [routeResult, setRouteResult] = useState(null)
+  const [routePanelOpen, setRoutePanelOpen] = useState(false)
+  const [routeMessage, setRouteMessage] = useState('')
+
+  function setRouteModeValue(value) {
+    routeModeRef.current = value
+    setRouteMode(value)
+  }
+
+  function removeRouteMarkers() {
+    for (const marker of Object.values(routeMarkersRef.current)) {
+      marker?.remove()
+    }
+    routeMarkersRef.current = { start: null, end: null }
+  }
+
+  function updateRouteMarkers(points) {
+    removeRouteMarkers()
+    const map = mapRef.current
+    if (!map) return
+    if (points.start) {
+      routeMarkersRef.current.start = new Marker({ color: '#16a34a' })
+        .setLngLat(points.start.coordinate)
+        .addTo(map)
+    }
+    if (points.end) {
+      routeMarkersRef.current.end = new Marker({ color: '#dc2626' })
+        .setLngLat(points.end.coordinate)
+        .addTo(map)
+    }
+  }
+
+  function setRoutePath(features) {
+    const source = mapRef.current?.getSource('route-path')
+    if (!source) return
+    source.setData({
+      type: 'FeatureCollection',
+      features,
+    })
+  }
+
+  function clearRoute() {
+    setRouteModeValue(false)
+    routePointsRef.current = { start: null, end: null }
+    routeResultRef.current = null
+    setRouteResult(null)
+    setRoutePanelOpen(false)
+    setRouteMessage('')
+    removeRouteMarkers()
+    setRoutePath([])
+  }
+
+  function toggleRouteMode() {
+    if (
+      routeModeRef.current ||
+      routeResultRef.current ||
+      routePointsRef.current.start
+    ) {
+      clearRoute()
+      return
+    }
+    setRouteModeValue(true)
+    setRouteMessage('Wybierz punkt startowy na trasie')
+  }
+
+  function findNearestPiste(coordinates) {
+    let nearest = null
+    for (const feature of routeFeaturesRef.current.values()) {
+      if (feature.kind !== 'trasa') continue
+      if (!isWithinRouteBounds(coordinates, feature, ROUTE_SNAP_RADIUS_M)) {
+        continue
+      }
+      const candidate = nearestRoutePoint(feature, coordinates)
+      if (!nearest || candidate.distance < nearest.distance) {
+        nearest = { ...candidate, uid: feature.uid }
+      }
+    }
+    return nearest && nearest.distance <= ROUTE_SNAP_RADIUS_M ? nearest : null
+  }
+
+  function handleRouteMapClick(lngLat) {
+    const map = mapRef.current
+    if (!map || !routeModeRef.current) return
+
+    const snap = findNearestPiste([lngLat.lng, lngLat.lat])
+    if (!snap) {
+      setRouteMessage('Kliknij w liniową trasę, maksymalnie 100 m od niej')
+      return
+    }
+
+    const current = routePointsRef.current
+    if (!current.start) {
+      const next = { start: snap, end: null }
+      routePointsRef.current = next
+      updateRouteMarkers(next)
+      setRouteMessage('Wybierz punkt docelowy na trasie')
+      return
+    }
+
+    const next = { start: current.start, end: snap }
+    const mapFeatures = [...routeFeaturesRef.current.values()]
+    const graph = buildRouteGraph(mapFeatures, map, [
+      { id: 'start', ...current.start },
+      { id: 'end', ...snap },
+    ])
+    const result = findRoute(graph)
+
+    if (!result) {
+      routePointsRef.current = { start: current.start, end: null }
+      updateRouteMarkers(routePointsRef.current)
+      setRouteMessage('Nie znaleziono połączenia między tymi punktami')
+      return
+    }
+
+    const seenStepNames = new Set()
+    const stepItems = []
+    for (const uid of result.steps) {
+      const feature = routeFeaturesRef.current.get(uid)
+      if (!feature) continue
+      const label = routeFeatureLabel(feature)
+      const key = `${feature.kind}:${label}`
+      if (seenStepNames.has(key)) continue
+      seenStepNames.add(key)
+      stepItems.push({
+        label,
+        kind: feature.kind,
+        color:
+          feature.kind === 'trasa'
+            ? DIFFICULTY_COLORS[feature.properties.difficulty] || '#888888'
+            : '#7c3aed',
+      })
+    }
+    const resultWithLabels = {
+      ...result,
+      stepItems,
+      stepLabels: stepItems.map((item) => item.label),
+    }
+    routePointsRef.current = next
+    routeResultRef.current = resultWithLabels
+    setRouteResult(resultWithLabels)
+    setRoutePanelOpen(false)
+    updateRouteMarkers(next)
+    setRoutePath(
+      routePathFeatures(resultWithLabels.edges, routeFeaturesRef.current),
+    )
+    setRouteModeValue(false)
+    setRouteMessage('')
+  }
 
   function selectFeature(source, ids) {
     const map = mapRef.current
@@ -393,10 +1288,10 @@ function App() {
           'atmosphere-blend': 1,
         },
       },
-      center: [10.9933, 46.96],
-      zoom: 12.5,
+      center: [10.977123714520985, 46.95802633395613],
+      zoom: 13,
       pitch: 40,
-      bearing: 0,
+      bearing: -90,
       maxPitch: 85,
       maxZoom: 19,
       attributionControl: false,
@@ -407,9 +1302,40 @@ function App() {
     map.addControl(new ScaleControl(), 'bottom-left')
     map.addControl(new AttributionControl({ compact: true }), 'bottom-right')
 
+    const logMapMove = () => {
+      const center = map.getCenter()
+      console.log('[Mapa] centrum po przesunięciu:', {
+        lng: center.lng,
+        lat: center.lat,
+      })
+    }
+    const logMapZoom = () => {
+      console.log('[Mapa] zoom:', map.getZoom())
+    }
+    map.on('moveend', logMapMove)
+    map.on('zoomend', logMapZoom)
+
+    const homeMarkerElement = document.createElement('div')
+    homeMarkerElement.className = 'home-marker'
+    homeMarkerElement.setAttribute('role', 'img')
+    homeMarkerElement.setAttribute('aria-label', 'Dom')
+    homeMarkerElement.title = 'Dom'
+    homeMarkerElement.innerHTML = `
+      <svg viewBox="0 0 32 42" aria-hidden="true">
+        <path class="home-marker-pin" d="M16 41S2 25.5 2 15C2 7.3 8.3 1 16 1s14 6.3 14 14c0 10.5-14 26-14 26Z" />
+        <path class="home-marker-house" d="m8.5 19 7.5-6 7.5 6v8h-15v-8Zm4.5 8v-5h6v5" />
+      </svg>`
+    const homeMarker = new Marker({ element: homeMarkerElement, anchor: 'bottom' })
+      .setLngLat(HOME_COORDINATES)
+      .addTo(map)
+
     mapRef.current = map
 
     return () => {
+      removeRouteMarkers()
+      map.off('moveend', logMapMove)
+      map.off('zoomend', logMapZoom)
+      homeMarker.remove()
       map.remove()
       mapRef.current = null
     }
@@ -464,6 +1390,10 @@ function App() {
           type: 'geojson',
           data: lifts,
           promoteId: 'uid',
+        })
+        map.addSource('route-path', {
+          type: 'geojson',
+          data: { type: 'FeatureCollection', features: [] },
         })
 
         map.addLayer(
@@ -641,6 +1571,90 @@ function App() {
             paint: { 'line-color': 'rgba(0, 0, 0, 0)', 'line-width': 18 },
           }
         )
+        map.addLayer({
+          id: 'route-path-casing',
+          type: 'line',
+          source: 'route-path',
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          paint: {
+            'line-color': '#ffffff',
+            'line-width': 9,
+          },
+        })
+        map.addLayer({
+          id: 'route-path',
+          type: 'line',
+          source: 'route-path',
+          filter: ['!=', ['get', 'kind'], 'lift'],
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          paint: {
+            'line-color': ROUTE_COLOR,
+            'line-width': 6,
+          },
+        })
+        map.addLayer({
+          id: 'route-lifts',
+          type: 'line',
+          source: 'route-path',
+          filter: ['==', ['get', 'kind'], 'lift'],
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          paint: {
+            'line-color': '#7c3aed',
+            'line-width': 6,
+            'line-dasharray': [2, 1.5],
+          },
+        })
+        map.addLayer({
+          id: 'route-piste-labels',
+          type: 'symbol',
+          source: 'route-path',
+          filter: [
+            'all',
+            ['==', ['get', 'kind'], 'piste'],
+            ['has', 'label'],
+          ],
+          layout: {
+            'symbol-placement': 'line',
+            'symbol-spacing': 260,
+            'text-field': ['get', 'label'],
+            'text-font': ['Noto Sans Bold'],
+            'text-size': 16,
+            'text-letter-spacing': 0.05,
+            'text-allow-overlap': true,
+            'text-ignore-placement': true,
+          },
+          paint: {
+            'text-color': ROUTE_COLOR,
+            'text-halo-color': '#ffffff',
+            'text-halo-width': 3,
+            'text-halo-blur': 0.2,
+          },
+        })
+        map.addLayer({
+          id: 'route-lift-labels',
+          type: 'symbol',
+          source: 'route-path',
+          filter: [
+            'all',
+            ['==', ['get', 'kind'], 'lift'],
+            ['has', 'label'],
+          ],
+          layout: {
+            'symbol-placement': 'line-center',
+            'text-field': ['get', 'label'],
+            'text-font': ['Noto Sans Bold'],
+            'text-size': 16,
+            'text-letter-spacing': 0.05,
+            'text-allow-overlap': true,
+            'text-ignore-placement': true,
+          },
+          paint: {
+            'text-color': '#5b21b6',
+            'text-halo-color': '#ffffff',
+            'text-halo-width': 3,
+            'text-halo-blur': 0.2,
+          },
+        })
 
         const uidToGroup = new Map()
         const uidToFeature = new Map()
@@ -706,6 +1720,12 @@ function App() {
           uidToFeature.set(f.properties.uid, f)
         }
         featuresRef.current = uidToFeature
+        routeFeaturesRef.current = new Map(
+          [
+            ...normalizeRouteFeatures(pistes.features, 'pistes', 'trasa'),
+            ...normalizeRouteFeatures(lifts.features, 'lifts', 'wyciąg'),
+          ].map((feature) => [feature.uid, feature]),
+        )
 
         const siteRank = (site) => {
           if (site === 'Sölden') return 0
@@ -725,6 +1745,7 @@ function App() {
         )
 
         const handlePisteClick = (e) => {
+          if (routeModeRef.current) return
           const feature = e.features[0]
           const group =
             uidToGroup.get(feature.id) ||
@@ -754,6 +1775,7 @@ function App() {
         map.on('click', 'pistes-area-fill', handlePisteClick)
 
         map.on('click', 'lifts-hit', (e) => {
+          if (routeModeRef.current) return
           const feature = e.features[0]
           const group =
             uidToGroup.get(feature.id) ||
@@ -772,6 +1794,14 @@ function App() {
         })
 
         map.on('click', (e) => {
+          console.log('[Mapa] kliknięcie:', {
+            lng: e.lngLat.lng,
+            lat: e.lngLat.lat,
+          })
+          if (routeModeRef.current) {
+            handleRouteMapClick(e.lngLat)
+            return
+          }
           const hit = map.queryRenderedFeatures(e.point, {
             layers: ['pistes-hit-line', 'pistes-area-fill', 'lifts-hit'],
           })
@@ -809,6 +1839,17 @@ function App() {
       .toLowerCase()
       .includes(search.trim().toLowerCase()),
   )
+  const routeStepItems = routeResult?.stepItems ?? []
+  const routeStepLabels = routeStepItems.map((item) => item.label)
+  const routeSummary = routeStepLabels.join(' → ')
+  const routeDownhillLiftCount = routeResult?.cost[0] ?? 0
+  const routeLiftCount = routeResult?.cost[1] ?? 0
+  const routeDistance = routeResult?.cost[3] ?? 0
+  const routeButtonLabel = routeResult
+    ? 'Wyczyść trasę'
+    : routeMode
+      ? 'Anuluj wybór punktów'
+      : 'Wyznacz trasę'
 
   return (
     <div className="map-wrap">
@@ -820,6 +1861,96 @@ function App() {
       >
         {menuOpen ? '✕' : '☰'}
       </button>
+      <button
+        className={`route-toggle${menuOpen ? ' open' : ''}${
+          routeMode ? ' active' : ''
+        }${routeResult ? ' has-route' : ''}`}
+        onClick={toggleRouteMode}
+        aria-label={routeButtonLabel}
+        title={routeButtonLabel}
+      >
+        {routeResult || routeMode ? (
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12M18 6L6 18" />
+          </svg>
+        ) : (
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="6" cy="18" r="2" />
+            <circle cx="18" cy="6" r="2" />
+            <path d="M8 17c3-1 3-7 6-8 1-.3 2-.3 4-1" />
+          </svg>
+        )}
+      </button>
+      {routeMessage && (
+        <div className="route-message" role="status">
+          {routeMessage}
+        </div>
+      )}
+      {routeResult && (
+        <section className={`route-panel${routePanelOpen ? ' expanded' : ''}`}>
+          <button
+            className="route-panel-toggle"
+            onClick={() => setRoutePanelOpen((open) => !open)}
+            aria-expanded={routePanelOpen}
+            aria-label={routePanelOpen ? 'Zwiń trasę' : 'Rozwiń trasę'}
+          >
+            <span className="route-panel-title">Trasa</span>
+            <span className="route-panel-summary" title={routeSummary}>
+              {routeStepItems.map((item, index) => (
+                <Fragment key={`${item.kind}/${item.label}/${index}`}>
+                  {index > 0 && (
+                    <svg
+                      className="route-summary-arrow"
+                      viewBox="0 0 24 24"
+                      aria-hidden="true"
+                    >
+                      <path d="M4 12h16m-6-6 6 6-6 6" />
+                    </svg>
+                  )}
+                  <span
+                    className="route-step-badge"
+                    style={{ background: item.color }}
+                  >
+                    {item.label}
+                  </span>
+                </Fragment>
+              ))}
+            </span>
+            <span className="route-panel-chevron" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path
+                  d={routePanelOpen ? 'M6 9l6 6 6-6' : 'M6 15l6-6 6 6'}
+                />
+              </svg>
+            </span>
+          </button>
+          {routePanelOpen && (
+            <div className="route-panel-details">
+              <div className="route-panel-meta">
+                {routeLiftCount}{' '}
+                {routeLiftCount === 1 ? 'wyciąg' : 'wyciągów'} ·{' '}
+                {routeDownhillLiftCount > 0 &&
+                  `${routeDownhillLiftCount} w dół wyciągiem · `}
+                {routeDistance >= 1000
+                  ? `${(routeDistance / 1000).toFixed(1)} km`
+                  : `${Math.round(routeDistance)} m`}
+              </div>
+              <ol className="route-panel-list">
+                {routeStepItems.map((item, index) => (
+                  <li key={`${item.kind}/${item.label}/${index}`}>
+                    <span
+                      className="route-step-badge"
+                      style={{ background: item.color }}
+                    >
+                      {item.label}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
+        </section>
+      )}
       <aside className={`sidebar${menuOpen ? ' open' : ''}`}>
         <input
           className="sidebar-search"

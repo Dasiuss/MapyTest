@@ -8,6 +8,34 @@
   height: 100%;
 }
 
+.home-marker {
+  width: 32px;
+  height: 42px;
+  cursor: default;
+  filter: drop-shadow(0 1px 2px rgba(15, 23, 42, 0.45));
+}
+
+.home-marker svg {
+  display: block;
+  width: 32px;
+  height: 42px;
+  overflow: visible;
+}
+
+.home-marker-pin {
+  fill: #0b3d66;
+  stroke: #fff;
+  stroke-width: 2;
+}
+
+.home-marker-house {
+  fill: none;
+  stroke: #fff;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
 .maplibregl-popup-content {
   font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
   font-size: 13px;
@@ -53,6 +81,196 @@
 
 .menu-toggle.open {
   left: calc(min(320px, 85vw) + 12px);
+}
+
+.route-toggle {
+  position: fixed;
+  top: 60px;
+  left: 12px;
+  z-index: 1001;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 9px;
+  border: none;
+  border-radius: 8px;
+  background: #0b3d66;
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  transition: left 0.25s ease, background 0.2s ease;
+}
+
+.route-toggle.open {
+  left: calc(min(320px, 85vw) + 12px);
+}
+
+.route-toggle.active {
+  background: #1557b0;
+}
+
+.route-toggle.has-route {
+  background: #475569;
+}
+
+.route-toggle svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.route-message {
+  position: fixed;
+  top: 112px;
+  left: 50%;
+  z-index: 900;
+  max-width: calc(100vw - 32px);
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.9);
+  color: #fff;
+  font-size: 13px;
+  text-align: center;
+  transform: translateX(-50%);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+.route-panel {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  left: 50%;
+  z-index: 900;
+  width: min(600px, calc(100vw - 24px));
+  overflow: hidden;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  background: #0f172a;
+  color: #e2e8f0;
+  box-shadow: 2px 0 12px rgba(0, 0, 0, 0.4);
+  transform: translateX(-50%);
+}
+
+.route-panel-toggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 46px;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.route-panel-toggle:hover {
+  background: #1e293b;
+}
+
+.route-panel-title {
+  flex-shrink: 0;
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.route-panel-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.route-summary-arrow {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  color: #94a3b8;
+}
+
+.route-summary-arrow path {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.route-step-badge {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  max-width: 180px;
+  overflow: hidden;
+  padding: 3px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.route-panel-chevron {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: #64748b;
+}
+
+.route-panel-chevron svg {
+  width: 18px;
+  height: 18px;
+}
+
+.route-panel-chevron path {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.5;
+}
+
+.route-panel-details {
+  padding: 0 14px 12px;
+  border-top: 1px solid #334155;
+}
+
+.route-panel-meta {
+  padding-top: 9px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.route-panel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.route-panel-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
 }
 
 .sidebar {

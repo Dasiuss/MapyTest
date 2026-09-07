@@ -5,6 +5,8 @@ Silnik: **MapLibre GL** + **React 19** + **Vite**. Cała logika mapy jest w jedn
 
 > **Zasada:** ten dokument (`AGENTS.md`) należy **zaktualizować przed każdym commitem** —
 > każda zmiana w kodzie (funkcje, warstwy, decyzje, konfiguracja) musi być tu odzwierciedlona.
+>
+> **Zasada pracy:** build produkcyjny i commit wykonuj wyłącznie na wyraźne polecenie użytkownika.
 
 ---
 
@@ -16,8 +18,9 @@ Silnik: **MapLibre GL** + **React 19** + **Vite**. Cała logika mapy jest w jedn
 
 **Stan dzisiejszy:** zrealizowana jest wizualizacja + interakcja (klik, etykiety, zaznaczanie,
 kolorowanie wg trudności i ratrakowania) oraz **menu/spis treści** z wyszukiwarką, grupowaniem po
-ośrodkach i deduplikacją tras. GPS/długości/nachylenia to **następne kroki**
-(nie zaimplementowane — patrz sekcja 16).
+ośrodkach i deduplikacją tras. Dodany jest także lokalny moduł wyznaczania trasy narciarskiej
+między dwoma punktami na trasach liniowych. GPS/długości/nachylenia poza długością używaną jako
+koszt routingu to **następne kroki** (nie zaimplementowane — patrz sekcja 16).
 
 ---
 
@@ -25,6 +28,7 @@ ośrodkach i deduplikacją tras. GPS/długości/nachylenia to **następne kroki*
 
 - `react` / `react-dom` `^19.2.8`
 - `maplibre-gl` `^6.5.0` (WebGL, teren 3D, style spec v8)
+- `@turf/distance`, `@turf/helpers` `^7.4.0` (odległości i geometria routingu)
 - `vite` `^8.2.2` + `@vitejs/plugin-react` `^6.1.0`
 - Lint: `oxlint` `^1.79.0` (konfiguracja `.oxlintrc.json`)
 
@@ -74,8 +78,8 @@ npm run preview   # podgląd buildu
 
 Definiowana w `new MapLibreMap({...})` w `src/App.jsx`:
 
-- `center: [10.9933, 46.96]` — okolice Sölden (Austria)
-- `zoom: 12.5`, `pitch: 40`, `bearing: 0` (północ u góry)
+- `center: [10.977123714520985, 46.95802633395613]` — okolice Sölden (Austria)
+- `zoom: 13`, `pitch: 40`, `bearing: -90` (zachód u góry)
 - `maxPitch: 85`, `maxZoom: 19`
 - `terrain: { source: 'terrain', exaggeration: 0.6 }` — wyolbrzymienie terenu 0.6
 - `sky` — niebo/fog (kolory `#a5d6f5`, `#f0f6fa`, `#e8eef2`), `horizon-fog-blend`/`fog-ground-blend` 0.4
@@ -95,6 +99,10 @@ Definiowana w `new MapLibreMap({...})` w `src/App.jsx`:
 - `FullscreenControl()` — `top-right`
 - `ScaleControl()` — `bottom-left`
 - `AttributionControl({ compact: true })` — `bottom-right`
+
+Stała pinezka domu jest ustawiona na współrzędnych `46°58'21.6"N 11°00'34.2"E`
+(`lng/lat: [11.0095, 46.9726666667]`). Jest to własny marker SVG w kształcie pinezki
+z białym symbolem domu.
 
 ### Worker
 
@@ -177,7 +185,7 @@ Właściwości wyciągu są prostsze: `uid`, `osmId`, `name`, `aerialway`, `site
 | Wartość | Kolor | Etykieta PL |
 | --- | --- | --- |
 | `novice` | `#22c55e` (zielony) | „zielona (bardzo łatwa)" |
-| `easy` | `#3b82f6` (niebieski) | „niebieska (łatwa)" |
+| `easy` | `#60a5fa` (niebieski) | „niebieska (łatwa)" |
 | `intermediate` | `#ef4444` (czerwony) | „czerwona (średnia)" |
 | `advanced` | `#111827` (prawie czarny) | „czarna (trudna)" |
 | `expert` | `#f97316` (pomarańczowy) | „czarna (ekspert)" |
@@ -291,6 +299,36 @@ Kolejność dodawania = kolejność rysowania (pierwsza na spodzie, ostatnia na 
   przez pojedynczy klik. Używane opcje: `padding: 80`, `maxZoom: 13`, zachowanie bieżącego
   `bearing` i `pitch`.
 
+### Nawigacja
+
+- Przycisk trasy znajduje się pod menu. Pierwszy prawidłowy klik na liniowej trasie ustawia start,
+  drugi ustawia cel i od razu uruchamia routing. Punkty są przyciągane do trasy w promieniu 100 m.
+- W trybie trasy kliknięcia mapy nie otwierają popupów ani zwykłego zaznaczenia; menu pozostaje
+  niezależne. Kliknięcie wyłącznika anuluje wybór lub czyści gotową trasę.
+- Routing używa wyłącznie liniowych tras i wyciągów. Trasy są skierowane w dół, a wyciągi normalnie
+  w górę; awaryjny kierunek wyciągu w dół jest dozwolony, ale silnie karany. Połączenia między
+  elementami mogą mieć maksymalnie 100 m i są dozwolone tylko przy zgodnym spadku wysokości.
+- Graf jest budowany w przeglądarce. Snapowanie oraz wykrywanie bliskich odcinków tras używają
+  szybkiej projekcji na segmentach w lokalnym układzie metrów oraz odrzucania po bboxach. W miejscu
+  przecięcia lub zbliżenia do 100 m powstają node’y na obu trasach; wysokość punktów jest odczytywana
+  z DEM przez `queryTerrainElevation`.
+- Koszt jest leksykograficzny: najpierw liczba zjazdów wyciągiem, potem całkowita liczba wyciągów,
+  długość połączeń i na końcu długość całkowita. Trudność trasy nie wpływa na wybór.
+- Ślad nawigacyjny jest rysowany przez osobne źródło i warstwy `route-path`, więc obejmuje tylko
+  faktycznie przejechane fragmenty tras. Trasy mają kolor `#1557b0` i szerokość 6 px, a wyciągi
+  `#7c3aed` z kreskowaniem i szerokością 6 px.
+  Warstwy `route-piste-labels` i `route-lift-labels` pokazują nazwy na śladzie większym, pogrubionym
+  tekstem z mocnym białym halo, nadpisującym kolizje ze zwykłymi etykietami mapy.
+  Pod mapą pojawia się domyślnie zwinięte podsumowanie kolejności z kolorowymi badge'ami tras
+  i wyciągów oraz ikonowymi strzałkami między elementami. Po rozwinięciu lista zachowuje styl
+  ciemnego menu, a badge tras używają kolorów trudności.
+
+### Logowanie debugowe
+
+- Konsola przeglądarki loguje współrzędne każdego kliknięcia mapy (`lng`, `lat`).
+- Po zakończeniu przesuwania mapy (`moveend`) logowane są współrzędne jej centrum.
+- Po zakończeniu zmiany zoomu (`zoomend`) logowany jest aktualny poziom zoomu.
+
 ---
 
 ## 11. Cache (Overpass)
@@ -370,7 +408,8 @@ Po pushu GitHub Pages automatycznie serwuje zawartość `docs/`.
 14. **Ślad testowy usunięty** całkowicie.
 15. **Optymalizacja warstw:** `pistes-hit-area` scalona z `pistes-area-fill`, usunięta
     `pistes-area-warning`, `text-allow-overlap: false`. Z 16 warstw zeszliśmy do 11.
-16. **Kamera startowa:** `center [10.9933, 46.96]`, `pitch 40`, `bearing 0` (północ u góry).
+16. **Kamera startowa:** `center [10.977123714520985, 46.95802633395613]`, `zoom 13`,
+    `pitch 40`, `bearing -90` (zachód u góry).
 17. **Ośrodki:** dodane relacje `site=piste`; przynależność rozwiązywana bezpośrednio lub przez
     `route=piste`, a menu grupuje po ośrodku i numerze/nazwie.
 18. **Menu:** wyszukiwarka, deduplikacja odcinków, zaznaczanie całych grup, etykiety wyciągów,
@@ -378,7 +417,13 @@ Po pushu GitHub Pages automatycznie serwuje zawartość `docs/`.
 19. **Double-click menu:** pojedynczy klik tylko zaznacza i mruga pięć razy; double-click wykonuje
     `fitBounds` z `maxZoom 13`, `padding 80`, bez resetowania pitch/bearing.
 20. **Błąd MapLibre:** import `Map` zmieniony na `MapLibreMap`, żeby nie przesłaniać wbudowanego
-    `Map` używanego do grupowania danych i indeksów.
+     `Map` używanego do grupowania danych i indeksów.
+21. **Nawigacja:** dodano lokalny graf tras liniowych i wyciągów, snapowanie startu/celu do 100 m,
+    wykrywanie bliskich odcinków tras i połączenia do 100 m, routing preferujący zjazd zamiast jazdy
+    wyciągiem w dół oraz niezależny ślad na osobnych warstwach, ograniczony do przejechanych
+    fragmentów, z niebieskimi trasami, fioletowymi wyciągami i zwijanym podsumowaniem.
+22. **Pinezka domu:** dodano stały marker SVG ze znaczkiem domu na współrzędnych
+    `46°58'21.6"N 11°00'34.2"E`.
 
 ---
 
